@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.local
+
+# 运行时数据与配置（含密钥）
+server/data/
+.env
+*.log
+npm-debug.log*
+
+# 备份与本地杂物
+backups/
+.idea/
+
+# 第三方库源码（winui-lib 不参与构建，前端使用 web/src/winui 内置副本）
+winui-lib/
+
+# 系统
+.DS_Store
+Thumbs.db
