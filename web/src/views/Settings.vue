@@ -585,7 +585,7 @@
     </div>
 
     <!-- 开发者选项（开发者模式开启后显示） -->
-    <WinExpander v-if="devEnabled" class="settings-expander" Header="开发者选项" HeaderIcon="&#xE71D;">
+    <WinExpander id="dev-options" v-if="devEnabled" class="settings-expander" Header="开发者选项" HeaderIcon="&#xE71D;">
       <div class="dev-actions">
         <div class="dev-row">
           <div>
@@ -630,6 +630,19 @@
           <button class="primary" :disabled="devBusy" @click="confirmDev">
             <span v-if="devBusy" class="loading"></span>开启开发者模式
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 开发者模式已开启提示（已开启时连点触发，不再进入开启流程） -->
+    <div v-if="devAlreadyModal" class="modal-mask" @click.self="devAlreadyModal = false">
+      <div class="modal" style="width: min(400px, 92vw)">
+        <h3>开发者模式已开启</h3>
+        <p class="muted" style="font-size: 13px; line-height: 1.7; margin-bottom: 4px">
+          开发者选项已显示在本页「开发者选项」区域，可直接使用；如需关闭请在该区域点击「关闭开发者模式」。
+        </p>
+        <div style="display: flex; justify-content: flex-end; gap: 10px">
+          <button class="primary" @click="devAlreadyModal = false">知道了</button>
         </div>
       </div>
     </div>
@@ -911,6 +924,7 @@ const devEnabled = ref(false);
 const sysFlash = ref('');
 const sysClicks = ref([]);
 const devModal = ref(false);
+const devAlreadyModal = ref(false);
 const devAgree = ref(false);
 const devPw = ref('');
 const devPwShow = ref(false);
@@ -952,7 +966,11 @@ function onSysRow(key) {
     sysClicks.value.push(now);
     if (sysClicks.value.length >= 5) {
       sysClicks.value = [];
-      devModal.value = true;
+      if (devEnabled.value) {
+        devAlreadyModal.value = true; // 已开启：弹窗提示，不再进入开启流程
+      } else {
+        devModal.value = true;
+      }
     }
   }
 }
@@ -974,6 +992,10 @@ async function confirmDev() {
     devAgree.value = false;
     devEnabled.value = true;
     devPw.value = '';
+    // 开启成功后自动滚动定位到「开发者选项」区域，避免"看不到选项"
+    nextTick(() => {
+      document.getElementById('dev-options')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
   } catch (e) {
     devErr.value = (e.response?.data?.error) || e.message || '开启失败';
   } finally {

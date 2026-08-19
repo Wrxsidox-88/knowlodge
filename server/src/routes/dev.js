@@ -29,11 +29,16 @@ function persist() {
 // 校验当前用户密码（enable / clear-data 均要求）
 function requirePassword(req, res) {
   const { password } = req.body || {};
-  if (!password) return res.status(400).json({ error: '请输入密码' });
+  if (!password) {
+    res.status(400).json({ error: '请输入密码' });
+    return false;
+  }
   const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
   if (!row || !verifyPassword(password, row.password_hash)) {
-    return res.status(400).json({ error: '密码不正确' });
+    res.status(400).json({ error: '密码不正确' });
+    return false;
   }
+  return true;
 }
 
 devRouter.get('/status', (req, res) => {
@@ -41,8 +46,7 @@ devRouter.get('/status', (req, res) => {
 });
 
 devRouter.post('/enable', (req, res) => {
-  const reject = requirePassword(req, res);
-  if (reject) return;
+  if (!requirePassword(req, res)) return;
   state.enabled = true;
   persist();
   logger.warn('开发者模式已开启', { user: req.user.username });
@@ -72,8 +76,7 @@ const CLEAR_TABLES = [
 ];
 
 devRouter.post('/clear-data', (req, res) => {
-  const reject = requirePassword(req, res);
-  if (reject) return;
+  if (!requirePassword(req, res)) return;
   const removed = {};
   for (const table of CLEAR_TABLES) {
     try {
