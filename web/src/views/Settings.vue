@@ -585,7 +585,7 @@
     </div>
 
     <!-- 开发者选项（开发者模式开启后显示） -->
-    <WinExpander id="dev-options" v-if="devEnabled" class="settings-expander" Header="开发者选项" HeaderIcon="&#xE71D;" :IsExpanded="devExpandOpen">
+    <WinExpander id="dev-options" v-if="devEnabled" class="settings-expander" Header="开发者选项" HeaderIcon="&#xE71D;" v-model:IsExpanded="devExpandOpen">
       <div class="dev-actions">
         <div class="dev-row">
           <div>
