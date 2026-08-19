@@ -19,76 +19,124 @@ function escapeHtml(s) {
 }
 
 export function renderMarkdown(text) {
-  let s = String(text || '');
-
+  const src = String(text || '');
   const formulas = [];
-  const stash = (f, display) => {
-    formulas.push({ f, display });
-    return `\u0000F${formulas.length - 1}\u0000`;
+  const stashMath = (f, display) => { formulas.push({ f, display }); return `\u0000F${formulas.length - 1}\u0000`; };
+
+  const inline = (raw) => {
+    let s = String(raw || '')
+      .replace(/\$\$([\s\S]+?)\$\$/g, (_, f) => stashMath(f.trim(), true))
+      .replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (m, pre, f) => pre + stashMath(f.trim(), false));
+    s = escapeHtml(s);
+    s = s
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\[([^\]\n]+)\]\(([^\)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+      .replace(/\[(\d+)\]/g, '<sup class="cite">[$1]</sup>');
+    return s;
   };
-  s = s.replace(/\$\$([\s\S]+?)\$\$/g, (_, f) => stash(f.trim(), true));
-  s = s.replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (m, pre, f) => pre + stash(f.trim(), false));
 
-  s = escapeHtml(s);
-  s = s.replace(/```([\s\S]*?)```/g, (_, code) => `<pre class="md-code">${code.trim()}</pre>`);
+  // 1) 先把围栏代码块(含语言标签, 如 ```bash)整体提取为占位符, 使其不参与逐行解析
+  const codeBlocks = [];
+  const src2 = src.replace(/(^|\n)```[^\n]*\n?([\s\S]*?)\n?```[ \t]*(?=\n|$)/g, (m, preB, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(code.replace(/\s+$/, ''));
+    return preB + `\u0000C${idx}\u0000`;
+  });
 
-  const lines = s.split('\n');
   const out = [];
-  let inUl = false;
-  let inOl = false;
-  const closeLists = () => {
-    if (inUl) out.push('</ul>');
-    if (inOl) out.push('</ol>');
-    inUl = inOl = false;
+  const listStack = [];            // {type:'ul'|'ol', depth}
+  const flushLists = (depth = 0) => {
+    while (listStack.length > depth) out.push('</' + listStack.pop().type + '>');
   };
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    const h = line.match(/^(#{1,4})\s+(.*)/);
-    if (h) {
-      closeLists();
-      out.push(`<h${h[1].length + 1}>${inline(h[2])}</h${h[1].length + 1}>`);
-      continue;
-    }
-    const ul = line.match(/^\s*[-*]\s+(.*)/);
-    if (ul) {
-      if (!inUl) {
-        closeLists();
-        out.push('<ul>');
-        inUl = true;
-      }
-      out.push(`<li>${inline(ul[1])}</li>`);
-      continue;
-    }
-    const ol = line.match(/^\s*(\d+)[.、)]\s+(.*)/);
-    if (ol) {
-      if (!inOl) {
-        closeLists();
-        out.push('<ol>');
-        inOl = true;
-      }
-      out.push(`<li>${inline(ol[2])}</li>`);
-      continue;
-    }
-    closeLists();
-    if (!line.trim()) {
-      out.push('');
-    } else {
-      out.push(`<p>${inline(line)}</p>`);
-    }
-  }
-  closeLists();
-  let html = out.join('\n');
+  const pushOpen = (type, depth) => {
+    const top = listStack[listStack.length - 1];
+    if (top && top.type === type && top.depth === depth) return;
+    flushLists(depth);
+    listStack.push({ type, depth });
+    out.push('<' + type + '>');
+  };
 
+  let tableBuf = [];
+  let tableSep = false;
+  const emitTable = () => {
+    if (!tableBuf.length) return;
+    let h = '<table><tbody>';
+    if (tableSep) {
+      const [head, ...body] = tableBuf;
+      h = '<table><thead><tr>' + head.map((c) => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+      body.forEach((r) => { h += '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>'; });
+    } else {
+      tableBuf.forEach((r) => { h += '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>'; });
+    }
+    out.push(h + '</tbody></table>');
+    tableBuf = [];
+    tableSep = false;
+  };
+  const isTableRow = (line) => line.trim().startsWith('|') || line.includes('|');
+  const isTblSep = (line) => /^\s*\|?[\s:|\-]+\|?\s*$/.test(line) && line.includes('-') && !/[A-Za-z0-9\u4e00-\u9fa5]/.test(line);
+
+  let quoteBuf = [];
+  const emitQuote = () => {
+    if (quoteBuf.length) { out.push('<blockquote>' + quoteBuf.map((q) => inline(q)).join('<br>') + '</blockquote>'); quoteBuf = []; }
+  };
+
+  for (const raw of src2.split('\n')) {
+    const line = raw.trimEnd();
+    const trimmed = line.trim();
+    if (!trimmed) { emitQuote(); flushLists(); emitTable(); out.push(''); continue; }
+
+    // 代码块占位行
+    const cbm = /^(\u0000C\d+\u0000)+$/.exec(trimmed);
+    if (cbm) {
+      emitQuote(); flushLists(); emitTable();
+      const idx = Math.min(outputCodeIdx(trimmed, codeBlocks.length), codeBlocks.length - 1);
+      out.push(`<pre class="md-code">${escapeHtml(codeBlocks[idx])}</pre>`);
+      continue;
+    }
+
+    // 表格段
+    if (isTableRow(line)) {
+      emitQuote(); flushLists();
+      if (isTblSep(line)) { tableSep = true; continue; }
+      const cells = line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
+      tableBuf = tableBuf.length ? tableBuf.concat([cells]) : [cells];
+      continue;
+    } else if (tableBuf.length) { emitTable(); }
+
+    // 引用
+    if (trimmed.startsWith('>')) { emitTable(); flushLists(); quoteBuf.push(trimmed.replace(/^>\s?/, '')); continue; }
+    else if (quoteBuf.length) { emitQuote(); }
+
+    const h = /^(#{1,6})\s+(.*)/.exec(trimmed);
+    if (h) { flushLists(); out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
+
+    if (/^([-_*])\1{2,}\s*$/.test(trimmed) && !/[A-Za-z0-9\u4e00-\u9fa5]/.test(trimmed)) { flushLists(); out.push('<hr/>'); continue; }
+
+    const indent = Math.min(3, Math.floor((line.match(/^\s*/)[0].length) / 2));
+    const ul = /^\s*[-*+]\s+(.*)/.exec(line);
+    const ol = /^\s*(\d+)[.、)]\s+(.*)/.exec(line);
+    if (ul) { emitQuote(); emitTable(); pushOpen('ul', indent); out.push(`<li>${inline(ul[1])}</li>`); continue; }
+    if (ol) { emitQuote(); emitTable(); pushOpen('ol', indent); out.push(`<li>${inline(ol[2])}</li>`); continue; }
+
+    flushLists(); emitTable(); emitQuote();
+    out.push(`<p>${inline(trimmed)}</p>`);
+  }
+  emitQuote(); flushLists(); emitTable();
+
+  let html = out.join('\n');
   html = html.replace(/\u0000F(\d+)\u0000/g, (_, i) => {
     const { f, display } = formulas[Number(i)];
-    try {
-      return katex.renderToString(f, { ...KATEX_OPTS, displayMode: display });
-    } catch {
-      return `<code>${f}</code>`;
-    }
+    try { return katex.renderToString(f, { ...KATEX_OPTS, displayMode: display }); } catch { return `<code>${escapeHtml(f)}</code>`; }
   });
   return html;
 }
+
+function outputCodeIdx(token, len) {
+  const m = /\u0000C(\d+)\u0000/.exec(token);
+  return m ? Number(m[1]) : 0;
+}
+
 
 function inline(s) {
   return s

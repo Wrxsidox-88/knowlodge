@@ -1342,6 +1342,43 @@ pre.md-code {
   overflow: auto;
 }
 
+.md-body table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+  font-size: 13px;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid var(--ctrl-border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.md-body thead th {
+  background: var(--ctrl-fill-secondary);
+  font-weight: 600;
+}
+.md-body blockquote {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--ctrl-fill-tertiary);
+  color: var(--text-secondary);
+}
+.md-body hr {
+  border: none;
+  border-top: 1px solid var(--ctrl-border);
+  margin: 12px 0;
+}
+.md-body a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.md-body a:hover {
+  text-decoration: underline;
+}
+
 sup.cite {
   color: var(--accent);
   cursor: default;
