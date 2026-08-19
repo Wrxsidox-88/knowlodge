@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import os from 'node:os';
+import { readFileSync } from 'node:fs';
 import { db } from '../db.js';
 import { logger } from '../logger.js';
 import { indexSize } from '../services/vectorStore.js';
@@ -9,6 +10,16 @@ export const monitorRouter = Router();
 
 const startedAt = Date.now();
 
+// 服务器/应用版本（server/package.json）
+const serverVersion = (() => {
+  try {
+    const p = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+    return p.version || '1.0.0';
+  } catch {
+    return '1.0.0';
+  }
+})();
+
 monitorRouter.get('/', (req, res) => {
   const count = (sql) => db.prepare(sql).get().c;
   res.json({
@@ -16,6 +27,10 @@ monitorRouter.get('/', (req, res) => {
     memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
     hostname: os.hostname(),
     aiEnabled: aiEnabled(),
+    // 版本信息（设置 - 账户 - 系统信息）
+    osVersion: `${os.type()} ${os.release()}${os.arch ? ` ${os.arch()}` : ''}`,
+    serverVersion,
+    nodeVersion: process.version,
     counts: {
       materials: count('SELECT COUNT(*) AS c FROM materials'),
       pendingMaterials: count("SELECT COUNT(*) AS c FROM materials WHERE status = 'pending'"),

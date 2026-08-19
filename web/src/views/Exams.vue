@@ -1,14 +1,12 @@
 <template>
   <div>
     <div v-if="pageLoading" class="page-loading"><span class="loading"></span>正在加载数据…</div>
-    <div class="row" style="align-items: flex-start">
-      <div class="card" style="max-width: 400px">
+    <div class="col-stack">
+      <div class="card">
         <h3>{{ editing ? '编辑考试记录' : '登记考试/练习' }}</h3>
         <div v-if="error" class="error-box">{{ error }}</div>
         <label class="field"><span>科目 *</span>
-          <select v-model="form.subject">
-            <option v-for="s in subjects" :key="s">{{ s }}</option>
-          </select>
+          <WinComboBox :ItemsSource="subjects" v-model:SelectedItem="form.subject" />
         </label>
         <label class="field"><span>名称（如：期中 / 第3章练习）</span>
           <input v-model="form.title" placeholder="选填" />
@@ -20,12 +18,10 @@
           </datalist>
         </label>
         <label class="field"><span>日期 *</span>
-          <input type="date" v-model="form.examDate" />
+          <WinDatePicker v-model:Date="examDateModel" />
         </label>
-        <div class="row">
-          <label class="field"><span>满分 *</span><input type="number" v-model="form.totalScore" /></label>
-          <label class="field"><span>得分 *</span><input type="number" v-model="form.score" /></label>
-        </div>
+        <label class="field" style="max-width: 260px"><span>满分 *</span><input type="number" v-model="form.totalScore" /></label>
+        <label class="field" style="max-width: 260px"><span>得分 *</span><input type="number" v-model="form.score" /></label>
         <label class="field"><span>备注</span><input v-model="form.note" placeholder="选填" /></label>
         <div class="toolbar">
           <button class="primary" :disabled="saving" @click="save">
@@ -36,13 +32,16 @@
         <div class="muted">成绩趋势图将按科目自动汇总；重复的考试记录会被拒绝录入。</div>
       </div>
 
-      <div class="card" style="flex: 2">
+      <div class="card">
         <div class="toolbar">
           <h3 style="margin: 0">成绩波动趋势</h3>
-          <select v-model="trendSubject" style="width: 140px" @change="loadTrend">
-            <option value="">全部科目</option>
-            <option v-for="s in usedSubjects" :key="s">{{ s }}</option>
-          </select>
+          <WinComboBox
+            :ItemsSource="trendSubjectOptions"
+            DisplayMemberPath="label"
+            SelectedValuePath="value"
+            v-model:SelectedValue="trendSubject"
+            @SelectionChanged="loadTrend"
+            Width="160" />
         </div>
         <div v-if="trend.length < 1" class="empty">登记考试后在此显示得分率趋势</div>
         <div v-else ref="trendEl" style="height: 280px"></div>
@@ -82,12 +81,14 @@
     <div class="card">
       <div class="toolbar">
         <h3 style="margin: 0">大型考试总览（多科目联合分析）</h3>
-        <select v-model="selectedEvent" style="width: 220px" @change="loadEvent">
-          <option value="">选择考试事件</option>
-          <option v-for="ev in events" :key="ev.id" :value="ev.id">
-            {{ ev.title }}（{{ ev.subject_count }}科 {{ ev.score }}/{{ ev.total_score }}）
-          </option>
-        </select>
+        <WinComboBox
+          :ItemsSource="eventOptions"
+          DisplayMemberPath="label"
+          SelectedValuePath="value"
+          v-model:SelectedValue="selectedEvent"
+          @SelectionChanged="loadEvent"
+          PlaceholderText="选择考试事件"
+          Width="300" />
         <button class="small" @click="loadEvents">刷新</button>
       </div>
 
@@ -98,25 +99,24 @@
           <div class="stat"><div class="num">{{ eventDetail.subjects.length }}</div><div class="label">参考科目</div></div>
           <div class="stat orange"><div class="num">{{ eventDetail.wrongStats?.length || 0 }}</div><div class="label">错因统计组</div></div>
         </div>
-        <div class="row" style="align-items: flex-start">
-          <div style="flex: 1.4">
-            <div v-for="s in eventDetail.subjects" :key="s.id" class="mastery-bar-row">
-              <span style="width: 44px">{{ s.subject }}</span>
-              <span class="bar"><div :style="{ width: s.pct + '%', background: barColor(s.pct) }"></div></span>
-              <span style="width: 110px; text-align: right">{{ s.score }}/{{ s.total_score }} · {{ s.pct }}%</span>
-            </div>
+        <div>
+          <div class="muted" style="margin-bottom: 6px">各科得分率</div>
+          <div v-for="s in eventDetail.subjects" :key="s.id" class="mastery-bar-row">
+            <span style="width: 44px">{{ s.subject }}</span>
+            <span class="bar"><div :style="{ width: s.pct + '%', background: barColor(s.pct) }"></div></span>
+            <span style="width: 110px; text-align: right">{{ s.score }}/{{ s.total_score }} · {{ s.pct }}%</span>
           </div>
-          <div style="flex: 1">
-            <div class="muted" style="margin-bottom: 6px">该次考试错题分布（科目 × 错因）</div>
-            <span
-              v-for="(w, i) in eventDetail.wrongStats"
-              :key="i"
-              class="cause-tag"
-              style="margin: 3px 4px 3px 0"
-              :style="{ background: causeColor(w.cause) + '22', color: causeColor(w.cause), borderColor: causeColor(w.cause) + '66' }"
-            >{{ w.subject }}·{{ w.cause }} × {{ w.count }}</span>
-            <div v-if="!eventDetail.wrongStats?.length" class="muted">暂无关联错题</div>
-          </div>
+        </div>
+        <div style="margin-top: 12px">
+          <div class="muted" style="margin-bottom: 6px">该次考试错题分布（科目 × 错因）</div>
+          <span
+            v-for="(w, i) in eventDetail.wrongStats"
+            :key="i"
+            class="cause-tag"
+            style="margin: 3px 4px 3px 0"
+            :style="{ background: causeColor(w.cause) + '22', color: causeColor(w.cause), borderColor: causeColor(w.cause) + '66' }"
+          >{{ w.subject }}·{{ w.cause }} × {{ w.count }}</span>
+          <div v-if="!eventDetail.wrongStats?.length" class="muted">暂无关联错题</div>
         </div>
         <h3 style="margin-top: 12px">总体分析
           <span class="badge" :class="eventDetail.summary?.source === 'ai' ? 'done' : 'pending'" style="margin-left: 8px">
@@ -134,8 +134,10 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { api } from '../api.js';
+import WinComboBox from '../winui/components/WinComboBox.vue';
+import WinDatePicker from '../winui/components/WinDatePicker.vue';
 import echarts, { CHART_COLORS, AXIS_STYLE, chartPalette } from '../charts.js';
-import { causeColor, renderMarkdown } from '../util.js';
+import { causeColor, renderMarkdown, parseLocalDate, fmtDate } from '../util.js';
 import { winConfirm } from '../dialogs.js';
 
 const md = renderMarkdown;
@@ -154,7 +156,22 @@ const pageLoading = ref(true);
 let chart = null;
 
 const form = reactive({ subject: '数学', title: '', examDate: '', totalScore: 100, score: '', note: '', examEventTitle: '' });
+const examDateModel = computed({
+  get: () => parseLocalDate(form.examDate),
+  set: (d) => { form.examDate = d ? fmtDate(d) : ''; }
+});
 const usedSubjects = computed(() => [...new Set(items.value.map((i) => i.subject))]);
+const trendSubjectOptions = computed(() => [
+  { label: '全部科目', value: '' },
+  ...usedSubjects.value.map((s) => ({ label: s, value: s }))
+]);
+const eventOptions = computed(() => [
+  { label: '选择考试事件', value: '' },
+  ...events.value.map((ev) => ({
+    label: `${ev.title}（${ev.subject_count}科 ${ev.score}/${ev.total_score}）`,
+    value: ev.id
+  }))
+]);
 
 function pct(e) {
   return e.total_score ? Math.round((e.score / e.total_score) * 1000) / 10 : 0;

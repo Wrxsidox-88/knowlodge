@@ -15,8 +15,77 @@
         document.documentElement.classList.add('theme-dark');
       }
     </script>
+    <style>
+      /* 全屏"正在加载"首屏层：刷新/加载页面时、静态资源尚未下载完成前显示。仅用内联关键样式，不依赖未加载的 bundle。 */
+      #kl-boot {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f5f5f5;
+        color: #1f1f1f;
+        transition: opacity 0.35s ease;
+      }
+      html[data-theme='dark'] #kl-boot {
+        background: #1f1f1f;
+        color: #ffffff;
+      }
+      #kl-boot.done {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #kl-boot .kb-inner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 28px;
+        padding: 24px;
+      }
+      #kl-boot .kb-ring {
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        border: 6px solid rgba(0, 120, 212, 0.22);
+        border-top-color: #0078d4;
+        animation: kbspin 0.9s linear infinite;
+      }
+      @keyframes kbspin {
+        to { transform: rotate(360deg); }
+      }
+      #kl-boot .kb-text {
+        text-align: center;
+      }
+      #kl-boot .kb-l1 {
+        font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+        font-size: 26px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+      }
+      #kl-boot .kb-l2 {
+        font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+        font-size: 15px;
+        opacity: 0.65;
+        margin-top: 10px;
+        animation: kbblink 1.6s ease-in-out infinite;
+      }
+      @keyframes kbblink {
+        0%, 100% { opacity: 0.4; }
+        50% { opacity: 0.85; }
+      }
+    </style>
   </head>
   <body>
+    <div id="kl-boot">
+      <div class="kb-inner">
+        <div class="kb-ring"></div>
+        <div class="kb-text">
+          <div class="kb-l1">请坐和放宽</div>
+          <div class="kb-l2">马上就好</div>
+        </div>
+      </div>
+    </div>
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>

@@ -1,5 +1,6 @@
 import { logger } from '../logger.js';
 import { getEnv } from '../config.js';
+import { assertQuota, recordUsage } from '../services/meter.js';
 
 export function getAIConfig() {
   return {
@@ -19,6 +20,34 @@ export function autoAnalyzeEnabled() {
 
 export function listsAiAutocreateEnabled() {
   return getEnv('LISTS_AI_AUTOCREATE', 'off').toLowerCase() === 'on';
+}
+
+// 是否允许 AI 分析时直接修改现有子知识网：
+// - on（默认）：分析前注入已有知识图谱，由 AI 自行判断"并入已有子网"还是"新建子网"；
+// - off：不注入已有图谱，每次分析都为材料新建独立子网，不改动已有子网。
+export function aiModifySubGraphsEnabled() {
+  return getEnv('AI_MODIFY_SUBGRAPHS', 'on').toLowerCase() !== 'off';
+}
+
+// ---------- 流式输出偏好（设置 → AI 与模型 → 流式输出设置）----------
+const STREAM_ENV = {
+  qa: 'STREAM_QA',
+  vision: 'STREAM_VISION',
+  encourage: 'STREAM_ENCOURAGE',
+  embed: 'STREAM_EMBED',
+  summary: 'STREAM_SUMMARY',
+  classify: 'STREAM_CLASSIFY',
+  graph: 'STREAM_GRAPH'
+};
+export function streamEnabled(category) {
+  const env = STREAM_ENV[category];
+  if (!env) return true;
+  return getEnv(env, 'on').toLowerCase() !== 'off';
+}
+export function getStreamCfg() {
+  const out = {};
+  for (const key of Object.keys(STREAM_ENV)) out[key] = streamEnabled(key);
+  return out;
 }
 
 const MODEL_HINT =
@@ -51,8 +80,10 @@ export function visionEnabled() {
 }
 
 async function request(pathname, body, { timeoutMs } = {}) {
+  assertQuota();
   const { baseUrl, apiKey } = getAIConfig();
   const url = `${baseUrl.replace(/\/$/, '')}${pathname}`;
+  const startedAt = Date.now();
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -63,12 +94,25 @@ async function request(pathname, body, { timeoutMs } = {}) {
     signal: AbortSignal.timeout(timeoutMs || requestTimeoutMs())
   });
   const text = await res.text();
+  const ms = Date.now() - startedAt;
+  const model = String(body?.model || '').slice(0, 40) || '-';
   if (!res.ok) {
-    logger.error(`AI 请求失败 ${pathname} status=${res.status}`, text.slice(0, 500));
+    logger.error(`AI 请求失败 ${pathname} model=${model} status=${res.status} 耗时=${ms}ms`, text.slice(0, 500));
     throw new Error(`AI 服务调用失败(${res.status}): ${text.slice(0, 200)}`);
   }
+  logger.info(`AI 请求成功 ${pathname} model=${model} 响应字符=${text.length} 耗时=${ms}ms`);
   try {
-    return JSON.parse(text);
+    const data = JSON.parse(text);
+    // 计量：官网非流式通道（视觉识别 / 向量化）
+    const scope = body?.input ? 'embed' : 'vision';
+    const usage = data?.usage;
+    if (usage) {
+      recordUsage(scope, model, usage.prompt_tokens, usage.completion_tokens || usage.total_tokens, ms, true);
+    } else {
+      const inChars = JSON.stringify(body || '').length;
+      recordUsage(scope, model, Math.ceil(inChars / 4), Math.ceil(text.length / 4), ms, false);
+    }
+    return data;
   } catch {
     throw new Error('AI 服务返回了非法 JSON');
   }
@@ -89,6 +133,7 @@ export async function chat(messages, { temperature = 0.3, model: modelOverride }
  * - 主模型失败自动切备用模型重试（前端以 fullText 覆盖渲染，避免重复）。
  */
 export async function chatStream(messages, { temperature = 0.3, model: modelOverride, onToken, signal } = {}) {
+  assertQuota();
   const { baseUrl, apiKey, chatModel, backupModel, retryCount } = getAIConfig();
   const models = modelOverride
     ? [modelOverride]
@@ -109,6 +154,7 @@ export async function chatStream(messages, { temperature = 0.3, model: modelOver
 }
 
 async function streamOnce(baseUrl, apiKey, model, messages, temperature, onToken, externalSignal) {
+  const startedAt = Date.now();
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
   const controller = new AbortController();
   let idleTimer = null;
@@ -143,6 +189,7 @@ async function streamOnce(baseUrl, apiKey, model, messages, temperature, onToken
     throw new Error(`AI 服务调用失败(${res.status}): ${text.slice(0, 200)}`);
   }
   let full = '';
+  let aiUsage = null;
   try {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -161,6 +208,7 @@ async function streamOnce(baseUrl, apiKey, model, messages, temperature, onToken
         if (!payload || payload === '[DONE]') continue;
         try {
           const json = JSON.parse(payload);
+          if (json?.usage) aiUsage = json.usage;
           const delta = json?.choices?.[0]?.delta?.content ?? json?.choices?.[0]?.text ?? '';
           if (delta) {
             full += delta;
@@ -178,6 +226,19 @@ async function streamOnce(baseUrl, apiKey, model, messages, temperature, onToken
   } finally {
     if (idleTimer) clearTimeout(idleTimer);
   }
+  logger.info(
+    `AI 流式成功 model=${model} 输入消息=${messages.length} 输出字符=${full.length} 耗时=${Date.now() - startedAt}ms`
+  );
+  // 计量：优先使用流式末尾 chunk 的真实 usage，否则按字符估算
+  const inChars = JSON.stringify(messages || []).length;
+  recordUsage(
+    'chat',
+    model,
+    aiUsage?.prompt_tokens ?? Math.ceil(inChars / 4),
+    aiUsage?.completion_tokens ?? Math.ceil(full.length / 4),
+    Date.now() - startedAt,
+    Boolean(aiUsage)
+  );
   return full;
 }
 

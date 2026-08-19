@@ -1,37 +1,40 @@
 <template>
   <div>
     <div v-if="pageLoading" class="page-loading"><span class="loading"></span>正在加载数据…</div>
-    <div class="row" style="align-items: flex-start">
-      <div class="card" style="max-width: 420px">
-        <h3>上传新材料</h3>
+    <div class="col-stack">
+      <WinExpander
+        class="settings-expander"
+        Header="上传新材料"
+        Description="粘贴文本或上传文件（txt/md/csv/json/docx/pdf/图片），入库后由 AI 分析构建知识图谱"
+        HeaderIcon="&#xE8B9;">
         <div v-if="error" class="error-box">{{ error }}</div>
         <label class="field">
           <span>标题 *</span>
           <input v-model="form.title" placeholder="如：牛顿运动定律讲义" />
         </label>
-        <div class="row">
-          <label class="field">
-            <span>科目（可留空由 AI 判断；多科目材料可选"综合"）</span>
-            <select v-model="form.subject">
-              <option value="">自动</option>
-              <option v-for="s in subjects" :key="s">{{ s }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>分册</span>
-            <input v-model="form.volume" placeholder="如：必修一" />
-          </label>
-        </div>
+        <label class="field">
+          <span>科目（可留空由 AI 判断；多科目材料可选"综合"）</span>
+          <WinComboBox
+            :ItemsSource="subjectOptions"
+            DisplayMemberPath="label"
+            SelectedValuePath="value"
+            v-model:SelectedValue="form.subject"
+            PlaceholderText="自动"
+            Width="100%" />
+        </label>
+        <label class="field">
+          <span>分册</span>
+          <input v-model="form.volume" placeholder="如：必修一" />
+        </label>
         <label class="field">
           <span>类型</span>
-          <select v-model="form.kind">
-            <option value="">自动</option>
-            <option>题目</option>
-            <option>笔记</option>
-            <option>知识点总结</option>
-            <option>教材章节</option>
-            <option>其他</option>
-          </select>
+          <WinComboBox
+            :ItemsSource="kindOptions"
+            DisplayMemberPath="label"
+            SelectedValuePath="value"
+            v-model:SelectedValue="form.kind"
+            PlaceholderText="自动"
+            Width="100%" />
         </label>
 
         <div class="tabs">
@@ -61,18 +64,28 @@
         <button class="primary" style="width: 100%" :disabled="submitting" @click="submit">
           <span v-if="submitting" class="loading"></span>提交入库（状态：待分析）
         </button>
-      </div>
+      </WinExpander>
 
-      <div class="card" style="flex: 2">
+      <WinExpander
+        class="settings-expander"
+        Header="材料列表"
+        :Description="'搜索、筛选与查看已入库材料（' + items.length + ' 份）'"
+        HeaderIcon="&#xE8A5;">
         <div class="toolbar">
-          <input v-model="filter.keyword" placeholder="搜索标题/概览" style="width: 200px" @keyup.enter="load" />
-          <select v-model="filter.status" style="width: 130px">
-            <option value="">全部状态</option>
-            <option value="pending">待分析</option>
-            <option value="analyzing">分析中</option>
-            <option value="done">已完成</option>
-            <option value="failed">失败</option>
-          </select>
+          <WinAutoSuggestBox
+            v-model:Text="filter.keyword"
+            :ItemsSource="materialSuggestions"
+            PlaceholderText="搜索标题/概览"
+            QueryIcon="Find"
+            :Width="220"
+            @SuggestionChosen="onMaterialChosen"
+            @QuerySubmitted="load" />
+          <WinComboBox
+            :ItemsSource="statusOptions"
+            DisplayMemberPath="label"
+            SelectedValuePath="value"
+            v-model:SelectedValue="filter.status"
+            Width="150" />
           <button class="small" @click="load">查询</button>
           <div class="spacer"></div>
           <span class="muted">共 {{ items.length }} 份材料</span>
@@ -102,10 +115,11 @@
             </td>
           </tr>
         </table>
-      </div>
+      </WinExpander>
     </div>
 
-    <div v-if="detail" class="modal-mask" @click.self="detail = null">
+        <Teleport to="body">
+<div v-if="detail" class="modal-mask" @click.self="detail = null">
       <div class="modal">
         <h3>{{ detail.title }}</h3>
         <div class="kv">
@@ -152,9 +166,11 @@
         <div style="text-align: right; margin-top: 12px"><button @click="detail = null">关闭</button></div>
       </div>
     </div>
+    </Teleport>
 
     <!-- 入库成功：询问是否立即分析（可附引导词、逐份勾选参与识别的照片；多份时批量分析并统一汇总） -->
-    <div v-if="askModal" class="modal-mask">
+        <Teleport to="body">
+<div v-if="askModal" class="modal-mask">
       <div class="modal" style="width: min(600px, 92vw)">
         <h3>{{ askModal.items.length > 1 ? `已入库 ${askModal.items.length} 份材料` : '材料已入库' }}</h3>
         <p class="muted" style="line-height: 1.7; margin-bottom: 12px">
@@ -193,12 +209,16 @@
         </div>
       </div>
     </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
+import WinComboBox from '../winui/components/WinComboBox.vue';
+import WinExpander from '../winui/components/WinExpander.vue';
+import WinAutoSuggestBox from '../winui/components/WinAutoSuggestBox.vue';
 import { api } from '../api.js';
 import { STATUS_TEXT } from '../util.js';
 import ImagePickList from '../components/ImagePickList.vue';
@@ -206,6 +226,23 @@ import { winConfirm } from '../dialogs.js';
 
 const route = useRoute();
 const subjects = ['数学', '物理', '化学', '生物', '语文', '英语', '历史', '地理', '政治', '综合', '其他'];
+const SUBJECT_OPTIONS = [{ label: '自动', value: '' }, ...subjects.map((s) => ({ label: s, value: s }))];
+const subjectOptions = SUBJECT_OPTIONS;
+const kindOptions = [
+  { label: '自动', value: '' },
+  { label: '题目', value: '题目' },
+  { label: '笔记', value: '笔记' },
+  { label: '知识点总结', value: '知识点总结' },
+  { label: '教材章节', value: '教材章节' },
+  { label: '其他', value: '其他' }
+];
+const statusOptions = [
+  { label: '全部状态', value: '' },
+  { label: '待分析', value: 'pending' },
+  { label: '分析中', value: 'analyzing' },
+  { label: '已完成', value: 'done' },
+  { label: '失败', value: 'failed' }
+];
 const items = ref([]);
 const detail = ref(null);
 const images = ref([]);
@@ -216,6 +253,21 @@ const files = ref([]); // 支持一次选择多份文件
 const fileInput = ref(null);
 const form = reactive({ title: '', subject: '', volume: '', kind: '', content: '' });
 const filter = reactive({ keyword: '', status: '' });
+
+// 材料列表搜索建议：基于已加载材质的标题，随输入实时过滤
+const materialSuggestions = computed(() => {
+  const q = (filter.keyword || '').trim();
+  return items.value
+    .map((m) => m.title)
+    .filter((t) => t && (!q || t.includes(q)))
+    .slice(0, 8);
+});
+
+function onMaterialChosen({ SelectedItem }) {
+  if (!SelectedItem) return;
+  filter.keyword = SelectedItem;
+  load();
+}
 
 // 上传成功后的"是否立即分析"确认弹窗（支持多份材料 + 逐份勾选参与识别的照片）
 const askModal = ref(null); // { items: [{id, title, imageCount}] }

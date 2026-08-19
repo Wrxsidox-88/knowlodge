@@ -289,6 +289,19 @@ CREATE TABLE IF NOT EXISTS mindmaps (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS token_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL DEFAULT (datetime('now')),
+  scope TEXT NOT NULL DEFAULT 'chat',
+  model TEXT NOT NULL DEFAULT '-',
+  in_tokens INTEGER NOT NULL DEFAULT 0,
+  out_tokens INTEGER NOT NULL DEFAULT 0,
+  ms INTEGER NOT NULL DEFAULT 0,
+  estimate INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage (ts);
 `;
 
 db.exec(SCHEMA);

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { markBootReady } from './bootState.js';
 
 // AI 相关接口（问答/分析/判题）输出较慢，给足超时；问答主链路已改为流式
 export const http = axios.create({ baseURL: '/api', timeout: 600000 });
@@ -40,17 +41,34 @@ function stopLoading() {
 http.interceptors.request.use((config) => {
   const token = localStorage.getItem('kl_token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (typeof config.url === 'string' && !config.url.startsWith('/auth')) anyNonAuthStarted = true;
   startLoading();
   return config;
 });
 
+// 首屏"内容就绪"信号：加载层保留到首个非登录（/auth 除外）请求完成才淡出移除。
+// 页面的第一个数据请求基本就是首屏关键数据；无初始请求的页面由 main.js 看门狗兜底。
+let bootNotified = false;
+let anyNonAuthStarted = false;
+export function bootRequestStarted() {
+  return anyNonAuthStarted;
+}
+function notifyBoot(res) {
+  if (bootNotified) return;
+  if (typeof res?.config?.url === 'string' && res.config.url.startsWith('/auth')) return;
+  bootNotified = true;
+  markBootReady();
+}
+
 http.interceptors.response.use(
   (res) => {
     stopLoading();
+    notifyBoot(res);
     return res.data;
   },
   (err) => {
     stopLoading();
+    notifyBoot(err);
     if (err.response?.status === 401 && location.pathname !== '/login') {
       localStorage.removeItem('kl_token');
       location.href = '/login';
@@ -88,6 +106,13 @@ async function downloadWithAuth(url, fallbackName) {
 export const api = {
   login: (username, password) => http.post('/auth/login', { username, password }),
   me: () => http.get('/auth/me'),
+  updateAccount: (data) => http.post('/auth/account', data),
+  verifyPassword: (password) => http.post('/auth/verify-password', { password }),
+  devStatus: () => http.get('/dev/status'),
+  devEnable: (password) => http.post('/dev/enable', { password }),
+  devDisable: () => http.post('/dev/disable'),
+  devClearData: (password) => http.post('/dev/clear-data', { password }),
+  getLogs: () => http.get('/dev/logs'),
 
   listMaterials: (params) => http.get('/materials', { params }),
   getMaterial: (id) => http.get(`/materials/${id}`),
@@ -122,6 +147,7 @@ export const api = {
   listBatches: () => http.get('/analysis/batches'),
   getBatch: (id) => http.get(`/analysis/batches/${id}`),
   listJobs: (materialId) => http.get('/analysis/jobs', { params: materialId ? { materialId } : {} }),
+  getJobLogs: (jobId) => http.get(`/analysis/jobs/${jobId}/logs`),
   getJob: (id) => http.get(`/analysis/jobs/${id}`),
 
   ask: (question) => http.post('/qa', { question }),
@@ -143,7 +169,16 @@ export const api = {
 
   getSettings: () => http.get('/settings'),
   saveSettings: (values) => http.put('/settings', { values }),
-  testAI: () => http.post('/settings/ai/test'),
+  getUsagemeter: () => http.get('/usagemeter/status'),
+  saveUsagemeter: (cfg) => http.post('/usagemeter/config', cfg),
+  usagemeterGrant: (value, unit) => http.post('/usagemeter/grant', { value, unit }),
+  usagemeterReset: () => http.post('/usagemeter/reset'),  testAI: () => http.post('/settings/ai/test'),
+
+  getUpdateStatus: () => http.get('/update/status'),
+  checkUpdate: () => http.post('/update/check'),
+  getUpdateDiff: () => http.get('/update/diff'),
+  saveUpdateSettings: (values) => http.post('/update/settings', { values }),
+  applyUpdate: (payload) => http.post('/update/apply', payload),
 
   monitor: () => http.get('/monitor'),
 
@@ -234,6 +269,15 @@ export const api = {
  * handlers: { onMeta(meta), onToken(delta, full), onDone({messageId, result}), onError(message) }
  * 返回 AbortController 供调用方取消。
  */
+export function sendMessage(convId, question, model, references) {
+  return http.post(`/chat/conversations/${convId}/messages`, {
+    question,
+    model: model || undefined,
+    references: references && references.length ? references : undefined,
+    stream: false
+  });
+}
+
 export function sendMessageStream(convId, question, model, references, handlers = {}) {
   const controller = new AbortController();
   (async () => {

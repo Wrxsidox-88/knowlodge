@@ -3,8 +3,8 @@ import path from 'node:path';
 import { db } from '../db.js';
 import { ROOT_DIR, DATA_DIR } from '../config.js';
 import { logger } from '../logger.js';
-import { aiEnabled, visionEnabled, chat, embedBatch, visionDescribe } from '../ai/client.js';
-import { upsertNode, addEdge, ensureSubGraph, findNodeIdByName, graphContextForAI } from './graph.js';
+import { aiEnabled, visionEnabled, aiModifySubGraphsEnabled, chat, embedBatch, visionDescribe } from '../ai/client.js';
+import { upsertNode, addEdge, ensureSubGraph, findNodeIdByName, graphContextForAI, subGraphsContextForAI, mergeGraphNode } from './graph.js';
 import { splitChunks, extractKeywords, sentencesOf } from './textutil.js';
 import { upsertVector } from './vectorStore.js';
 
@@ -19,15 +19,42 @@ function updateJob(jobId, patch) {
     .run(...Object.values(patch), jobId);
 }
 
+// ---- 材料分析实时输出（jobId -> 流水线日志，内存缓冲，进程内共享）----
+// 供「分析任务 → 实时输出」面板轮询查看 AI 逐步骤产出（步骤进展 + AI 实际输出片段）。
+const jobTrace = new Map();
+export function getJobTrace(jobId) {
+  return jobTrace.get(Number(jobId)) || [];
+}
+export function clearJobTrace(jobId) {
+  jobTrace.delete(Number(jobId));
+}
+function trace(jobId, kind, text) {
+  try {
+    const arr = jobTrace.get(Number(jobId)) || [];
+    arr.push({ t: new Date().toISOString(), kind, text });
+    if (arr.length > 600) arr.shift();
+    jobTrace.set(Number(jobId), arr);
+  } catch {
+    /* 实时输出不影响分析主流程 */
+  }
+}
+function traceStep(jobId, step) {
+  trace(jobId, 'step', step);
+}
+
 export function createJob(materialId, batchId = null) {
   const info = db.prepare('INSERT INTO analysis_jobs (material_id, status, step, batch_id) VALUES (?, ?, ?, ?)')
     .run(materialId, 'queued', '排队中', batchId);
-  return Number(info.lastInsertRowid);
+  const jobId = Number(info.lastInsertRowid);
+  clearJobTrace(jobId);
+  traceStep(jobId, '任务已创建，进入排队');
+  return jobId;
 }
 
 export function runAnalysis(materialId, jobId, guide = '', opts = {}) {
   setImmediate(() => analyze(materialId, jobId, guide, opts).catch((e) => {
     logger.error(`分析任务 ${jobId} 异常: ${e.message}`);
+    trace(jobId, 'error', `分析失败：${e.message}`);
     updateJob(jobId, { status: 'failed', message: e.message });
     db.prepare(`UPDATE materials SET status = 'failed', updated_at = datetime('now') WHERE id = ?`).run(materialId);
   }));
@@ -96,6 +123,7 @@ async function analyze(materialId, jobId, guide = '', opts = {}) {
   if (!material) throw new Error('材料不存在');
   db.prepare(`UPDATE materials SET status = 'analyzing', updated_at = datetime('now') WHERE id = ?`).run(materialId);
   updateJob(jobId, { status: 'running', progress: 5, step: '开始分析' });
+  traceStep(jobId, `开始分析《${material.title || `材料 #${materialId}`}》`);
 
   const useAI = aiEnabled();
   if (!useAI) {
@@ -104,6 +132,7 @@ async function analyze(materialId, jobId, guide = '', opts = {}) {
 
   updateJob(jobId, { progress: 10, step: '图片识别' });
   const { enrichedContent, imageCount, describedCount, reusedCount, skippedCount } = await enrichWithVision(materialId, material, jobId, opts);
+  trace(jobId, 'step', `图片识别完成：${imageCount} 张${describedCount ? `（新识别 ${describedCount}）` : ''}${reusedCount ? `（复用 ${reusedCount}）` : ''}${skippedCount ? `（跳过 ${skippedCount}）` : ''}`);
 
   // 纯图片材料保护：视觉分析是最先执行的步骤；若图片全部未识别成功则明确提示，避免后续步骤基于空文本乱猜
   const meaningfulText = enrichedContent
@@ -122,47 +151,51 @@ async function analyze(materialId, jobId, guide = '', opts = {}) {
     updateJob(jobId, { message: '提示：图片视觉识别失败，结果可能不完整' });
   }
 
-  let classification;
-  if (useAI) {
-    updateJob(jobId, { progress: 25, step: '材料分类' });
-    classification = await classify(material.title, enrichedContent, guide);
-  } else {
-    classification = fallbackClassify({ ...material, content: enrichedContent });
-  }
-  const subject = material.subject || classification.subject || '其他';
-  const volume = material.volume || classification.volume || null;
-  const kind = material.kind || classification.kind || '其他';
-  db.prepare('UPDATE materials SET subject = ?, volume = ?, kind = ?, meta = ?, updated_at = datetime(\'now\') WHERE id = ?')
-    .run(subject, volume, kind, JSON.stringify({ logicalParts: classification.logicalParts || [], imageCount }), materialId);
-  logger.info(`材料 ${materialId} 分类完成: ${subject}/${volume || '-'}/${kind}`, classification.logicalParts?.length ? { parts: classification.logicalParts.length } : undefined);
-
-  updateJob(jobId, { progress: 40, step: '生成概览' });
+  // ---------- 步骤 2：生成概览 ----------
+  updateJob(jobId, { progress: 25, step: '生成概览' });
   const summary = useAI ? await smartSummarize(material.title, enrichedContent, jobId) : fallbackSummary({ ...material, content: enrichedContent });
+  trace(jobId, 'ai', `概览（AI 输出）：${summary.trim().slice(0, 300)}`);
   db.prepare('UPDATE materials SET summary = ?, updated_at = datetime(\'now\') WHERE id = ?').run(summary, materialId);
 
-  updateJob(jobId, { progress: 55, step: '知识抽取' });
-  // 先让 AI "阅读"已有图谱（节点+子网），分析时尽量复用已有节点、连接已有知识、归入已有子网
-  const graphContext = useAI ? graphContextForAI() : null;
-  if (useAI && graphContext) {
-    updateJob(jobId, { message: '已载入现有知识图谱，AI 将尽量与已有知识点建立连接' });
+  // ---------- 步骤 3：知识抽取 ----------
+  // 子网策略（设置 → AI 设置 → 允许 AI 直接修改现有子网）：
+  // - 开启：注入已有知识图谱（知识点+子网），由 AI 自行判断"并入已有子网"还是"新建子网"；
+  // - 关闭：不注入已有图谱，每次分析都为材料新建独立子网，不改动任何已有子网。
+  const modifySubGraphs = aiModifySubGraphsEnabled();
+  const graphContext = useAI && modifySubGraphs ? graphContextForAI() : null;
+  if (useAI && modifySubGraphs) {
+    updateJob(jobId, {
+      message: graphContext
+        ? '已载入现有知识图谱，AI 将自行判断并入已有子网或新建子网'
+        : '图谱暂无已有内容，本次将按材料主题新建子网（后续分析可并入已有子网）'
+    });
+  } else if (useAI) {
+    updateJob(jobId, { message: '子网模式：每次分析新建独立子网（设置中已关闭"允许 AI 直接修改现有子网"）' });
   }
+  updateJob(jobId, { progress: 40, step: '知识抽取' });
+  // 分类已调整到内容分析完成后进行，抽取阶段仅以用户预设科目作兜底
+  const presetSubject = material.subject || null;
   let extraction;
   if (useAI) {
-    extraction = await smartExtract(material.title, enrichedContent, subject, guide, jobId, graphContext);
+    extraction = await smartExtract(material.title, enrichedContent, presetSubject, guide, jobId, graphContext);
   } else {
     extraction = fallbackExtract({ ...material, content: enrichedContent });
   }
+  trace(jobId, 'ai',
+    `知识抽取：${extraction.nodes.length} 个知识点（${extraction.nodes.slice(0, 40).map((n) => n.name).join('、')}${extraction.nodes.length > 40 ? '…' : ''}），${extraction.edges.length} 条关系，${(extraction.subGraphs || []).length} 个子知识网`);
 
-  updateJob(jobId, { progress: 70, step: '并入知识图谱' });
+  // ---------- 步骤 4：并入知识图谱 ----------
+  updateJob(jobId, { progress: 55, step: '并入知识图谱' });
   const nodeIdMap = new Map();
   for (const n of extraction.nodes) {
     // 科目不再按材料预先隔离：优先采用 AI 为每个节点标注的科目；
-    // 跨科目通用节点（做题方法、注意事项等）AI 会标注为“公共”；无法识别时回退材料科目
-    const nodeSubject = NODE_SUBJECTS.includes(n.subject) ? n.subject : subject;
+    // 跨科目通用节点（做题方法、注意事项等）AI 会标注为"公共"；无法识别时回退用户预设科目（可空，分类后回填）
+    const nodeSubject = NODE_SUBJECTS.includes(n.subject) ? n.subject : presetSubject;
     const id = upsertNode({
       name: n.name,
       subject: nodeSubject,
-      volume,
+      // 分类（含分册判定）后置，此处仅用用户预设分册，分类结果在步骤 6 回填
+      volume: material.volume || null,
       category: n.category || '概念',
       description: n.description || null,
       materialId
@@ -175,20 +208,64 @@ async function analyze(materialId, jobId, guide = '', opts = {}) {
     let s = nodeIdMap.get(normName(e.source));
     let t = nodeIdMap.get(normName(e.target));
     // 端点未出现在本次抽取结果中时，按名字解析已有图谱节点——使新材料能连接到已有知识网络
-    if (!s) { s = findNodeIdByName(e.source, subject); if (s) linkedExisting++; }
-    if (!t) { t = findNodeIdByName(e.target, subject); if (t) linkedExisting++; }
+    if (!s) { s = findNodeIdByName(e.source, presetSubject); if (s) linkedExisting++; }
+    if (!t) { t = findNodeIdByName(e.target, presetSubject); if (t) linkedExisting++; }
     if (s && t && addEdge(s, t, e.relation, materialId)) edgeCount++;
   }
+  const createdSubGraphIds = [];
+  const touchedSubGraphIds = [];
   for (const sg of extraction.subGraphs || []) {
     const memberIds = (sg.nodes || [])
-      .map((name) => nodeIdMap.get(normName(name)) || findNodeIdByName(name, subject))
+      .map((name) => nodeIdMap.get(normName(name)) || findNodeIdByName(name, presetSubject))
       .filter(Boolean);
-    // ensureSubGraph 按名称复用已有子网：同主题的多份材料并入同一子网，避免一份资料一个新子网
-    ensureSubGraph(sg.name, materialId, memberIds, sg.description || null);
+    // forceNew：关闭"允许 AI 修改现有子网"时不按名称复用已有子网，每次分析都新建独立子网；
+    // 开启时仍按名称复用——同主题材料并入同一子网，是否同主题由 AI 在抽取时自行判断
+    const ensured = ensureSubGraph(sg.name, materialId, memberIds, sg.description || null, { forceNew: !modifySubGraphs });
+    if (ensured) {
+      touchedSubGraphIds.push(ensured.id);
+      if (ensured.created) createdSubGraphIds.push(ensured.id);
+    }
   }
-  logger.info(`材料 ${materialId} 图谱合并完成: 节点 ${nodeIdMap.size}，新增边 ${edgeCount}${linkedExisting ? `（其中 ${linkedExisting} 个端点连接到已有知识点）` : ''}`);
+  logger.info(`材料 ${materialId} 图谱合并完成: 节点 ${nodeIdMap.size}，新增边 ${edgeCount}${linkedExisting ? `（其中 ${linkedExisting} 个端点连接到已有知识点）` : ''}，子网新建 ${createdSubGraphIds.length}/${touchedSubGraphIds.length}`);
 
-  updateJob(jobId, { progress: 85, step: '向量化' });
+  // ---------- 步骤 5：图谱结构优化（生成后由 AI 再次审查：去重/改名/边修剪/子网拆分合并） ----------
+  if (useAI) {
+    updateJob(jobId, { progress: 68, step: '图谱结构优化' });
+    try {
+      const stats = await optimizeGraphStructure(materialId, material.title, extraction, nodeIdMap, touchedSubGraphIds, createdSubGraphIds, {
+        modifySubGraphs,
+        subject: presetSubject
+      });
+      updateJob(jobId, { message: `图谱结构优化完成：${stats.text}` });
+      trace(jobId, 'ai', `图谱结构优化：${stats.text}`);
+      logger.info(`材料 ${materialId} 图谱结构优化: ${stats.text}`);
+    } catch (e) {
+      logger.warn(`材料 ${materialId} 图谱结构优化失败（保留原结构）: ${e.message}`);
+      updateJob(jobId, { message: `提示：图谱结构优化失败（${e.message}），已保留原结构` });
+    }
+  }
+
+  // ---------- 步骤 6：材料分类（放在最后） ----------
+  // 基于已分析出的概览 / 知识点 / 子网等实际内容分类，而不是在分析前只看标题瞎猜
+  updateJob(jobId, { progress: 82, step: '材料分类' });
+  let classification;
+  if (useAI) {
+    classification = await classify(material.title, enrichedContent, guide, { summary, extraction });
+  } else {
+    classification = fallbackClassify({ ...material, content: enrichedContent });
+  }
+  const subject = material.subject || classification.subject || '其他';
+  const volume2 = material.volume || classification.volume || null;
+  const kind = material.kind || classification.kind || '其他';
+  trace(jobId, 'ai', `材料分类：科目「${subject}」${volume2 ? `分册「${volume2}」` : ''}类型「${kind}」${(classification.logicalParts || []).length ? `（含 ${classification.logicalParts.length} 个逻辑部分）` : ''}`);
+  db.prepare('UPDATE materials SET subject = ?, volume = ?, kind = ?, meta = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(subject, volume2, kind, JSON.stringify({ logicalParts: classification.logicalParts || [], imageCount }), materialId);
+  // 科目/分册回填：本次材料新建但尚未定科目（或分册）的节点，按分类结果补齐（撞上已有同名节点时自动合并）
+  backfillNodeSubjects(materialId, subject, volume2);
+  logger.info(`材料 ${materialId} 分类完成: ${subject}/${volume2 || '-'}/${kind}`, classification.logicalParts?.length ? { parts: classification.logicalParts.length } : undefined);
+
+  // ---------- 步骤 7：向量化 ----------
+  updateJob(jobId, { progress: 90, step: '向量化' });
   const chunks = splitChunks(enrichedContent).map((text, i) => {
     const partMatch = (classification.logicalParts || []).find((p) => p.title && text.includes(p.title));
     return { title: partMatch?.title || `片段${i + 1}`, text };
@@ -221,7 +298,8 @@ async function analyze(materialId, jobId, guide = '', opts = {}) {
   const imageNote = imageCount
     ? `，图片 ${imageCount} 张${describedCount ? `（新识别 ${describedCount}）` : ''}${reusedCount ? `（复用已有识别 ${reusedCount}）` : ''}${skippedCount ? `（未参与识别 ${skippedCount}）` : ''}`
     : '';
-  updateJob(jobId, { status: 'done', progress: 100, step: '完成', message: `知识点 ${nodeIdMap.size}，关系 ${edgeCount}，片段 ${chunkRows.length}${imageNote}` });
+  updateJob(jobId, { status: 'done', progress: 100, step: '完成', message: `知识点 ${nodeIdMap.size}，关系 ${edgeCount}，子知识网新建 ${createdSubGraphIds.length}，片段 ${chunkRows.length}${imageNote}` });
+  traceStep(jobId, `分析完成：知识点 ${nodeIdMap.size}，关系 ${edgeCount}，子知识网新建 ${createdSubGraphIds.length}，片段 ${chunkRows.length}`);
   db.prepare(`UPDATE materials SET status = 'done', updated_at = datetime('now') WHERE id = ?`).run(materialId);
   logger.info(`材料 ${materialId} 分析完成`);
 }
@@ -350,17 +428,31 @@ function parseLLMJSON(text) {
   }
 }
 
-async function classify(title, content, guide = '') {
-  const body = content.slice(0, 3000);
+/**
+ * 材料分类（流水线最后一步）：基于"已分析出的实际内容"（概览 + 抽取的知识点/子网）分类，
+ * 而不是在分析前只凭标题猜测。analyzed 为空时退化为纯内容分类（离线/兜底场景）。
+ */
+async function classify(title, content, guide = '', analyzed = null) {
+  const body = content.slice(0, 2500);
+  const nodeNames = (analyzed?.extraction?.nodes || []).map((n) => String(n?.name || '').trim()).filter(Boolean).slice(0, 60);
+  const sgNames = (analyzed?.extraction?.subGraphs || []).map((s) => String(s?.name || '').trim()).filter(Boolean).slice(0, 20);
+  const analyzedSection = analyzed
+    ? `
+【已分析出的内容（请以此为分类依据，权重高于标题）】
+内容概览：${analyzed.summary || '（无）'}
+已提取知识点（${nodeNames.length} 个）：${nodeNames.join('、') || '（无）'}
+已建子知识网：${sgNames.join('、') || '（无）'}
+`
+    : '';
   const reply = await chat([
     {
       role: 'system',
-      content: `你是学习资料分类助手。阅读材料后只输出 JSON，格式：
+      content: `你是学习资料分类助手。该材料已完成内容概览与知识抽取，请根据"已分析出的实际内容"判断材料分类（标题可能有误导性，不要只看标题），只输出 JSON，格式：
 {"subject":"${SUBJECTS.join('|')}"之一,"volume":"分册或教材模块，如'必修一'，无法判断则为空字符串","kind":"${KINDS.join('|')}"之一,"logicalParts":[{"title":"逻辑部分标题","summary":"一句话概括"}]}
 logicalParts 提取材料中的方法、规律、总结等逻辑部分，2-6 个。
 注意：一份材料可能同时包含多个科目的内容，若明显跨多个科目，subject 填"综合"，不要强行归入单一科目。不要输出 JSON 以外的内容。`
     },
-    { role: 'user', content: `标题：${title}\n\n材料内容：\n${body}${guide ? `\n\n用户分析引导：${guide}` : ''}` }
+    { role: 'user', content: `标题：${title}\n${analyzedSection}\n材料内容（节选）：\n${body}${guide ? `\n\n用户分析引导：${guide}` : ''}` }
   ], { temperature: 0.1 });
   const data = parseLLMJSON(reply);
   if (!SUBJECTS.includes(data.subject)) data.subject = '其他';
@@ -459,7 +551,7 @@ async function smartExtract(title, content, subject, guide, jobId, graphContext 
 
 async function extractKnowledge(title, content, subject, guide = '', graphContext = null) {
   const body = content.slice(0, 6000);
-  // 已有图谱上下文：让 AI 复用已有节点名、连接已有知识点、归入已有子网，避免一份资料一个新子网
+  // 已有图谱上下文：让 AI 复用已有节点名、连接已有知识点；子网去留由 AI 按主题独立判断
   const graphSection = graphContext
     ? `
 【已有知识图谱（抽取前必读）】
@@ -468,8 +560,14 @@ ${graphContext}
 图谱连接要求（非常重要）：
 6. 若材料中的知识点与上方"已有知识点"中的某个相同或等价，nodes 中必须输出与已有完全一致的名字（系统按"名字+科目"自动合并为同一节点），严禁另起近似名造成重复节点。
 7. edges 的 source/target 允许直接引用已有知识点的名字（即使该名字未出现在本次 nodes 中）。请尽量让新知识点与已有知识点建立关联，使本材料融入现有图谱而不是孤立存在。
-8. subGraphs 优先归入已有子知识网：若本材料某主题与某个已有子网属于同一主题，直接输出该已有子网的名称（完全一致），系统会把新成员并入该子网；仅当主题确实全新时才新建子网。`
+8. subGraphs 子网归属（请逐个主题独立判断，不要盲目合并，也不要盲目新建）：
+   - 仅当本材料某主题与某个已有子网的主题实质相同（同一章节/同一题型/同一知识专题，且本材料是它的延续、补充、练习或同套内容）时，才直接输出该已有子网的完全一致名称，把新成员并入该子网；
+   - 主题不同、只是松散相关、或本材料属于新章节/新试卷/新专题时，必须新建子网并起一个准确概括主题的新名字，严禁把不相关的内容塞进已有子网使其无限膨胀；
+   - 拿不准时倾向于新建子网。每个子网应聚焦一个明确主题。`
     : '';
+  const subjectHint = subject
+    ? `无法判断时可参考当前科目：${subject}。`
+    : '确实无法判断时可留空，系统会在分类后补齐。';
   const reply = await chat([
     {
       role: 'system',
@@ -482,11 +580,11 @@ ${graphContext}
 要求：
 1. 知识点命名准确、避免歧义；edges 的 source/target 必须是本次 nodes 中出现的名字，或【已有知识图谱】中已存在的知识点名。
 2. 关联必须基于材料内容，宁缺毋滥，避免错误关联。
-3. 每道题目或每个主题构建一个 subGraph（已有同主题子网时优先复用其名称，见图谱连接要求）。
+3. 每道题目或每个主题构建一个 subGraph，子网名简洁准确地概括其主题${graphContext ? '（与已有子网的关系按下方第 8 条判断）' : ''}。
 4. 每个节点的 subject 必须从以下取值中选择：${NODE_SUBJECTS.join('|')}。
    - 材料可能包含多个科目的内容，不要预先隔离科目，请根据每个知识点的内容逐个判断其所属科目；
    - 做题方法、注意事项、学习习惯、考试技巧等跨多个科目通用的节点，subject 填"公共"；
-   - 无法判断时可参考当前科目：${subject}。
+   - ${subjectHint}
 5. 材料中如有"【图片内容分析】"，同样作为知识来源提取。描述中的数学/化学公式请使用 LaTeX 语法（数学如 $F=ma$，化学如 $\\ce{2H2 + O2 -> 2H2O}$）。不要输出 JSON 以外的内容。${graphSection}`
     },
     { role: 'user', content: `标题：${title}\n\n材料内容：\n${body}${guide ? `\n\n用户分析引导：${guide}` : ''}` }
@@ -497,6 +595,275 @@ ${graphContext}
     edges: (data.edges || []).filter((e) => e?.source && e?.target),
     subGraphs: (data.subGraphs || []).filter((s) => s?.name)
   };
+}
+
+// ---------- 生成后结构优化：图谱写入后，再由 AI 审查一遍结构并做去冗/纠偏 ----------
+// 输入本次分析涉及的节点与子网现状，AI 输出结构化"修订操作"，系统安全地应用。
+// 该步骤失败不影响主流程（analyze 中已 try/catch）。
+export async function optimizeGraphStructure(materialId, title, extraction, nodeIdMap, touchedSubGraphIds, createdSubGraphIds, opts = {}) {
+  const { modifySubGraphs = true, subject = null } = opts;
+  // 本次涉及的节点（以图谱中实际存在的为准）
+  const nodeIds = [...new Set([...nodeIdMap.values()])];
+  if (!nodeIds.length) return summarizeNoop('无节点，跳过结构优化');
+
+  const ph = nodeIds.map(() => '?').join(',');
+  const nodeRows = db.prepare(`SELECT id, name, subject, category, description FROM knowledge_nodes WHERE id IN (${ph})`).all(...nodeIds);
+  const nameById = new Map(nodeRows.map((r) => [r.id, r.name]));
+
+  // 本次涉及的边（端点均在本次节点集合内）
+  const edgeRows = db.prepare(
+    `SELECT source_id, target_id, relation FROM knowledge_edges
+     WHERE material_id = ? AND source_id IN (${ph}) AND target_id IN (${ph})`
+  ).all(materialId, ...nodeIds, ...nodeIds);
+
+  // 本次涉及子网的当前成员（含并入已有子网后的完整成员，便于 AI 判断是否过载/混杂）
+  const sgInfo = [];
+  for (const sgId of [...new Set(touchedSubGraphIds)]) {
+    const sg = db.prepare('SELECT id, name, description FROM sub_graphs WHERE id = ?').get(sgId);
+    if (!sg) continue;
+    const members = db.prepare(
+      `SELECT node_id FROM sub_graph_nodes WHERE sub_graph_id = ?`
+    ).all(sgId).map((r) => r.node_id);
+    sgInfo.push({
+      id: sg.id,
+      name: sg.name,
+      description: sg.description || '',
+      isNew: createdSubGraphIds.includes(sg.id),
+      members: members.map((id) => nameById.get(id)).filter(Boolean)
+    });
+  }
+
+  const payload = {
+    material: title,
+    subject: subject || '',
+    nodes: nodeRows.map((r) => ({ id: r.id, name: r.name, subject: r.subject || '', category: r.category || '', description: r.description || '' })),
+    edges: edgeRows.map((e) => ({ source: nameById.get(e.source_id), target: nameById.get(e.target_id), relation: e.relation })),
+    subGraphs: sgInfo
+  };
+
+  const existingSgContext = modifySubGraphs ? subGraphsContextForAI() : '';
+  const reply = await chat([
+    {
+      role: 'system',
+      content: `你是知识图谱结构优化专家。刚把一份学习材料分析并写入了知识图谱，请审查本次写入的结构并给出"结构修订操作"，让图谱更干净、子网划分更合理。只输出 JSON，格式：
+{
+ "mergeNodes":[{"keepId":节点id,"removeIds":[节点id],"reason":"简短理由"}],
+ "renameNodes":[{"id":节点id,"newName":"更简洁准确的名字","reason":"简短理由"}],
+ "deleteEdges":[{"source":"名","target":"名","relation":"关系","reason":"简短理由"}],
+ "splitSubGraph":[{"id":子网id,"into":[{"name":"新子网名","description":"简述","members":["成员知识点名"]}],"reason":"简短理由"}],
+ "moveSubGraph":[{"subGraphId":子网id,"members":["成员知识点名"],"newName":"可选：整体改名","reason":"简短理由"}]
+}
+规则（务必保守，宁缺毋滥，可全部输出空数组表示无需调整）：
+1. mergeNodes 仅当两个节点明显是同一知识点（同义、繁简、别名）时合并，保留更通用者 keepId；不要合并仅"相关"的节点。
+2. renameNodes 仅当名字冗长、含多余符号/序号、或不够规范时改名；保持简洁、可检索。
+3. deleteEdges 仅删除明显错误、牵强、或重复冗余的关系。
+4. splitSubGraph 仅当一个子网成员过多或主题混杂时拆分；拆分后的成员名必须来自该子网现有成员。
+5. moveSubGraph 用于给子网整体改一个更贴切的名字（newName），或对成员做小幅增删（members 给出期望的完整成员名单）。
+6. ${modifySubGraphs
+    ? '允许并入/复用已有子网（上下文见"已有子知识网"）：若本次某子网与已有子网同主题，可通过 moveSubGraph 把 newName 设为该已有子网名以并入。'
+    : '本次设置不允许改动已有子网：不要引用或并入已有子网，只在本次新建的子网内部优化。'}
+7. 只允许引用输入中出现的节点 id / 子网 id / 成员名；不要编造。不要输出 JSON 以外的内容。${existingSgContext ? `\n\n【已有子知识网（供参考）】\n${existingSgContext}` : ''}`
+    },
+    { role: 'user', content: JSON.stringify(payload) }
+  ], { temperature: 0.1 });
+
+  let plan;
+  try {
+    plan = parseLLMJSON(reply);
+  } catch (e) {
+    logger.warn(`材料 ${materialId} 结构优化返回无法解析，跳过: ${e.message}`);
+    return summarizeNoop('AI 修订结果无法解析，已跳过');
+  }
+  return applyStructureRevisions(materialId, plan, { modifySubGraphs, nameById });
+}
+
+function summarizeNoop(msg) {
+  return { merged: 0, renamed: 0, edgesDeleted: 0, split: 0, moved: 0, note: msg, text: msg };
+}
+
+// 安全应用 AI 的结构修订：所有操作都做存在性校验，逐项 try/catch，单条失败不影响其余
+function applyStructureRevisions(materialId, plan, { modifySubGraphs, nameById }) {
+  const stats = { merged: 0, renamed: 0, edgesDeleted: 0, split: 0, moved: 0, errors: 0 };
+  const nodeIdExists = (id) => Boolean(db.prepare('SELECT id FROM knowledge_nodes WHERE id = ?').get(Number(id)));
+
+  // 1) 合并重复节点
+  for (const m of plan?.mergeNodes || []) {
+    try {
+      const keep = Number(m?.keepId);
+      const removes = (m?.removeIds || []).map(Number).filter((id) => id && id !== keep);
+      if (!nodeIdExists(keep) || !removes.length) continue;
+      for (const rid of removes) {
+        if (!nodeIdExists(rid)) continue;
+        if (mergeGraphNode(rid, keep)) stats.merged++;
+      }
+    } catch (e) {
+      stats.errors++;
+      logger.warn(`结构优化 mergeNodes 失败: ${e.message}`);
+    }
+  }
+
+  // 2) 节点改名（避免与现有节点撞名导致意外合并，撞名时转为合并）
+  for (const r of plan?.renameNodes || []) {
+    try {
+      const id = Number(r?.id);
+      const newName = String(r?.newName || '').trim();
+      if (!nodeIdExists(id) || !newName) continue;
+      const cur = db.prepare('SELECT name, subject FROM knowledge_nodes WHERE id = ?').get(id);
+      if (cur.name === newName) continue;
+      const dup = db.prepare('SELECT id FROM knowledge_nodes WHERE name = ? AND id != ?').get(newName, id);
+      if (dup) {
+        // 已有同名节点：优先同科目者合并，避免产生"同名不同 id"
+        if (mergeGraphNode(id, dup.id)) stats.merged++;
+      } else {
+        db.prepare('UPDATE knowledge_nodes SET name = ? WHERE id = ?').run(newName, id);
+        stats.renamed++;
+      }
+    } catch (e) {
+      stats.errors++;
+      logger.warn(`结构优化 renameNodes 失败: ${e.message}`);
+    }
+  }
+
+  // 3) 删除冗余/错误边（仅限本材料写入的边）
+  for (const d of plan?.deleteEdges || []) {
+    try {
+      const s = resolveNodeIdByName(d?.source);
+      const t = resolveNodeIdByName(d?.target);
+      if (!s || !t) continue;
+      const rel = String(d?.relation || '').trim();
+      const row = rel
+        ? db.prepare('SELECT id FROM knowledge_edges WHERE source_id = ? AND target_id = ? AND relation = ? AND material_id = ?').get(s, t, rel, materialId)
+        : db.prepare('SELECT id FROM knowledge_edges WHERE source_id = ? AND target_id = ? AND material_id = ? LIMIT 1').get(s, t, materialId);
+      if (row) {
+        db.prepare('DELETE FROM knowledge_edges WHERE id = ?').run(row.id);
+        stats.edgesDeleted++;
+      }
+    } catch (e) {
+      stats.errors++;
+      logger.warn(`结构优化 deleteEdges 失败: ${e.message}`);
+    }
+  }
+
+  // 4) 子网拆分（仅限本次新建的子网：历史子网不允许在此删除）
+  for (const sp of plan?.splitSubGraph || []) {
+    try {
+      const sgId = Number(sp?.id);
+      const sg = db.prepare('SELECT id, name FROM sub_graphs WHERE id = ?').get(sgId);
+      const into = Array.isArray(sp?.into) ? sp.into : [];
+      if (!sg || into.length < 2 || !createdHere(sg.id)) continue;
+      // 先校验各目标合法，再落地，避免半途产生孤儿子网
+      const parts = [];
+      let ok = true;
+      for (const part of into) {
+        const name = String(part?.name || '').trim();
+        const memberIds = [...new Set((part?.members || []).map(resolveNodeIdByName).filter(Boolean))];
+        if (!name || !memberIds.length) { ok = false; break; }
+        parts.push({ name, description: part.description || null, memberIds });
+      }
+      if (!ok) continue;
+      for (const p of parts) {
+        ensureSubGraph(p.name, materialId, p.memberIds, p.description, { forceNew: !modifySubGraphs });
+      }
+      db.prepare('DELETE FROM sub_graphs WHERE id = ?').run(sg.id);
+      stats.split++;
+    } catch (e) {
+      stats.errors++;
+      logger.warn(`结构优化 splitSubGraph 失败: ${e.message}`);
+    }
+  }
+
+  // 5) 子网改名/成员整理
+  for (const mv of plan?.moveSubGraph || []) {
+    try {
+      const sgId = Number(mv?.subGraphId);
+      const sg = db.prepare('SELECT id, name FROM sub_graphs WHERE id = ?').get(sgId);
+      if (!sg) continue;
+      const newName = String(mv?.newName || '').trim();
+      if (newName && newName !== sg.name) {
+        const dup = db.prepare('SELECT id FROM sub_graphs WHERE name = ? AND id != ?').get(newName, sg.id);
+        if (dup) {
+          // 目标名已有子网：把成员并入目标子网后删除本子网（仅限本次新建者）
+          const memberIds = db.prepare('SELECT node_id FROM sub_graph_nodes WHERE sub_graph_id = ?').all(sg.id).map((r) => r.node_id);
+          if (memberIds.length) {
+            const link = db.prepare('INSERT OR IGNORE INTO sub_graph_nodes (sub_graph_id, node_id) VALUES (?, ?)');
+            for (const nid of memberIds) link.run(dup.id, nid);
+          }
+          if (createdHere(sg.id)) db.prepare('DELETE FROM sub_graphs WHERE id = ?').run(sg.id);
+        } else {
+          db.prepare('UPDATE sub_graphs SET name = ? WHERE id = ?').run(newName, sg.id);
+        }
+        stats.moved++;
+      }
+      if (Array.isArray(mv?.members)) {
+        const desired = mv.members.map(resolveNodeIdByName).filter(Boolean);
+        if (desired.length) {
+          // 增补缺失成员（不做激进删除，避免误移历史成员）
+          const link = db.prepare('INSERT OR IGNORE INTO sub_graph_nodes (sub_graph_id, node_id) VALUES (?, ?)');
+          for (const nid of desired) link.run(sg.id, nid);
+        }
+      }
+    } catch (e) {
+      stats.errors++;
+      logger.warn(`结构优化 moveSubGraph 失败: ${e.message}`);
+    }
+  }
+
+  // 判断某子网是否为本次材料新建（历史子网不允许在结构优化中删除）
+  function createdHere(sgId) {
+    const row = db.prepare('SELECT material_id, created_at FROM sub_graphs WHERE id = ?').get(sgId);
+    if (!row) return false;
+    return row.material_id === materialId;
+  }
+
+  return { ...stats, text: formatStats(stats) };
+}
+
+function resolveNodeIdByName(name) {
+  const clean = String(name || '').trim();
+  if (!clean) return null;
+  const any = db.prepare('SELECT id FROM knowledge_nodes WHERE name = ? ORDER BY id LIMIT 1').get(clean);
+  return any?.id || null;
+}
+
+function formatStats(s) {
+  const parts = [];
+  if (s.merged) parts.push(`合并重复节点 ${s.merged}`);
+  if (s.renamed) parts.push(`规范命名 ${s.renamed}`);
+  if (s.edgesDeleted) parts.push(`清理冗余关系 ${s.edgesDeleted}`);
+  if (s.split) parts.push(`拆分过载子网 ${s.split}`);
+  if (s.moved) parts.push(`整理子网 ${s.moved}`);
+  if (!parts.length) return '结构良好，无需调整';
+  return parts.join('，') + (s.errors ? `（${s.errors} 项跳过）` : '');
+}
+
+// 分类后置后，用分类得到的科目/分册回填本次新建节点（仅处理 source_material_id 对应者，
+// 避免影响其他材料的同名节点；若补齐科目会撞上已有同名同科目节点，则安全合并而非违约）
+function backfillNodeSubjects(materialId, subject, volume = null) {
+  const rows = db.prepare('SELECT id, name, subject, volume FROM knowledge_nodes WHERE source_material_id = ?').all(materialId);
+  let changed = 0;
+  for (const r of rows) {
+    const needSubject = !r.subject;
+    const needVolume = Boolean(volume) && !r.volume;
+    if (!needSubject && !needVolume) continue;
+    if (needSubject) {
+      const dup = db
+        .prepare('SELECT id FROM knowledge_nodes WHERE name = ? AND subject = ? AND id != ?')
+        .get(r.name, subject, r.id);
+      if (dup) {
+        // 已有同名同科目节点：合并（转移全部引用后删除），避免 UNIQUE(name, subject) 冲突
+        if (mergeGraphNode(r.id, dup.id)) changed++;
+        continue;
+      }
+    }
+    db.prepare(
+      `UPDATE knowledge_nodes SET
+         subject = CASE WHEN subject IS NULL OR subject = '' THEN ? ELSE subject END,
+         volume = CASE WHEN volume IS NULL OR volume = '' THEN ? ELSE volume END
+       WHERE id = ?`
+    ).run(subject, volume || null, r.id);
+    changed++;
+  }
+  if (changed) logger.info(`材料 ${materialId} 科目/分册回填: 处理 ${changed} 个节点`);
 }
 
 function fallbackClassify(material) {

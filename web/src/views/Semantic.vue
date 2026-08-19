@@ -8,9 +8,12 @@
           style="flex: 1; min-width: 260px"
           @keyup.enter="search"
         />
-        <select v-model="topK" style="width: 110px">
-          <option v-for="n in [5, 8, 12, 20]" :key="n" :value="n">Top {{ n }}</option>
-        </select>
+        <WinComboBox
+          :ItemsSource="topKOptions"
+          DisplayMemberPath="label"
+          SelectedValuePath="value"
+          v-model:SelectedValue="topK"
+          Width="120" />
         <button class="primary" :disabled="loading || !query.trim()" @click="search">
           <span v-if="loading" class="loading"></span>检索
         </button>
@@ -47,6 +50,7 @@
 <script setup>
 import { ref } from 'vue';
 import { useRoute } from 'vue-router';
+import WinComboBox from '../winui/components/WinComboBox.vue';
 import { api } from '../api.js';
 
 const route = useRoute();
@@ -55,6 +59,7 @@ const topK = ref(8);
 const results = ref(null);
 const loading = ref(false);
 const error = ref('');
+const topKOptions = [5, 8, 12, 20].map((n) => ({ label: `Top ${n}`, value: n }));
 
 async function search() {
   if (!query.value.trim()) return;

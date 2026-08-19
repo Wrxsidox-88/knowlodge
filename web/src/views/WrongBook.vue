@@ -3,22 +3,35 @@
     <div v-if="pageLoading" class="page-loading"><span class="loading"></span>正在加载数据…</div>
     <div class="card">
       <div class="toolbar">
-        <select v-model="filter.subject" style="width: 120px" @change="load">
-          <option value="">全部科目</option>
-          <option v-for="s in subjects" :key="s">{{ s }}</option>
-        </select>
-        <select v-model="filter.cause" style="width: 130px" @change="load">
-          <option value="">全部错因</option>
-          <option v-for="c in causes" :key="c.id" :value="c.name">{{ c.name }}</option>
-        </select>
-        <select v-model="filter.status" style="width: 120px" @change="load">
-          <option value="">全部状态</option>
-          <option value="pending">待分析</option>
-          <option value="analyzing">分析中</option>
-          <option value="done">已分析</option>
-          <option value="failed">失败</option>
-        </select>
-        <input v-model="filter.keyword" placeholder="搜索题干/解析" style="width: 200px" @keyup.enter="load" />
+        <WinComboBox
+          :ItemsSource="subjectFilterOptions"
+          DisplayMemberPath="label"
+          SelectedValuePath="value"
+          v-model:SelectedValue="filter.subject"
+          @SelectionChanged="load"
+          Width="140" />
+        <WinComboBox
+          :ItemsSource="causeFilterOptions"
+          DisplayMemberPath="label"
+          SelectedValuePath="value"
+          v-model:SelectedValue="filter.cause"
+          @SelectionChanged="load"
+          Width="160" />
+        <WinComboBox
+          :ItemsSource="wrongStatusOptions"
+          DisplayMemberPath="label"
+          SelectedValuePath="value"
+          v-model:SelectedValue="filter.status"
+          @SelectionChanged="load"
+          Width="140" />
+        <WinAutoSuggestBox
+          v-model:Text="filter.keyword"
+          :ItemsSource="wrongSuggestions"
+          PlaceholderText="搜索题干/解析"
+          QueryIcon="Find"
+          :Width="220"
+          @SuggestionChosen="onWrongChosen"
+          @QuerySubmitted="load" />
         <button class="small" @click="load">筛选</button>
         <button class="small" @click="openManage">错因标签管理</button>
         <div class="spacer"></div>
@@ -63,7 +76,8 @@
       </div>
     </div>
 
-    <div v-if="creating" class="modal-mask" @click.self="creating = false">
+        <Teleport to="body">
+<div v-if="creating" class="modal-mask" @click.self="creating = false">
       <div class="modal">
         <h3>录入错题</h3>
         <div v-if="createError" class="error-box">{{ createError }}</div>
@@ -71,23 +85,27 @@
           <button :class="{ active: ctab === 'text' }" @click="ctab = 'text'">文本录入</button>
           <button :class="{ active: ctab === 'photo' }" @click="ctab = 'photo'">拍照/图片</button>
         </div>
-        <div class="row">
-          <label class="field"><span>科目</span>
-            <select v-model="cform.subject"><option value="">未知</option><option v-for="s in subjects" :key="s">{{ s }}</option></select>
-          </label>
-          <label class="field"><span>关联考试</span>
-            <select v-model="cform.examId"><option :value="''">无</option><option v-for="e in exams" :key="e.id" :value="e.id">#{{ e.id }} {{ e.subject }} {{ e.exam_date }}</option></select>
-          </label>
-        </div>
+        <label class="field"><span>科目</span>
+          <WinComboBox
+            :ItemsSource="wrongSubjectOptions"
+            DisplayMemberPath="label"
+            SelectedValuePath="value"
+            v-model:SelectedValue="cform.subject"
+            PlaceholderText="未知" />
+        </label>
+        <label class="field"><span>关联考试</span>
+          <WinComboBox
+            :ItemsSource="examOptions"
+            DisplayMemberPath="label"
+            SelectedValuePath="value"
+            v-model:SelectedValue="cform.examId"
+            PlaceholderText="无" />
+        </label>
         <template v-if="ctab === 'text'">
           <label class="field"><span>题干 *</span><textarea v-model="cform.question" rows="4" placeholder="粘贴或输入题目内容"></textarea></label>
-          <div class="row">
-            <label class="field"><span>选项</span><input v-model="cform.options" placeholder="A. xxx B. xxx ...（选填）" /></label>
-          </div>
-          <div class="row">
-            <label class="field"><span>我的作答</span><input v-model="cform.userAnswer" /></label>
-            <label class="field"><span>正确答案</span><input v-model="cform.correctAnswer" /></label>
-          </div>
+          <label class="field"><span>选项</span><input v-model="cform.options" placeholder="A. xxx B. xxx ...（选填）" /></label>
+          <label class="field"><span>我的作答</span><input v-model="cform.userAnswer" /></label>
+          <label class="field"><span>正确答案</span><input v-model="cform.correctAnswer" /></label>
         </template>
         <template v-else>
           <label class="field"><span>错题照片（png/jpg，AI 识别题干）</span>
@@ -95,16 +113,15 @@
           </label>
           <label class="field"><span>补充说明（选填）</span><input v-model="cform.question" placeholder="如：第3题选择题" /></label>
         </template>
-        <div class="row">
-          <label class="field"><span>自我评估：错因</span>
-            <select v-model="cform.errorCause">
-              <option value="">由 AI 判断</option>
-              <option v-for="c in causes" :key="c.id" :value="c.name">{{ c.name }}</option>
-              <option value="__new__">＋ 新建标签…</option>
-            </select>
-          </label>
-          <label class="field"><span>错因补充</span><input v-model="cform.causeNote" placeholder="选填" /></label>
-        </div>
+        <label class="field"><span>自我评估：错因</span>
+          <WinComboBox
+            :ItemsSource="causeOptions"
+            DisplayMemberPath="label"
+            SelectedValuePath="value"
+            v-model:SelectedValue="cform.errorCause"
+            PlaceholderText="由 AI 判断" />
+        </label>
+        <label class="field"><span>错因补充</span><input v-model="cform.causeNote" placeholder="选填" /></label>
         <label v-if="cform.errorCause === '__new__'" class="field">
           <span>新标签名（保存后自动加入标签库，AI 分析时也能复用）</span>
           <input v-model="cform.newCauseName" placeholder="如：题意理解偏差" />
@@ -119,8 +136,10 @@
         </div>
       </div>
     </div>
+    </Teleport>
 
-    <div v-if="detail" class="modal-mask" @click.self="closeDetail">
+        <Teleport to="body">
+<div v-if="detail" class="modal-mask" @click.self="closeDetail">
       <div class="modal">
         <h3>错题 #{{ detail.id }} <span class="badge search" style="margin-left: 6px">{{ detail.subject || '未分类' }}</span></h3>
         <div class="toolbar" style="margin-bottom: 8px">
@@ -164,8 +183,10 @@
         </div>
       </div>
     </div>
+    </Teleport>
 
-    <div v-if="manageCauses" class="modal-mask" @click.self="manageCauses = false">
+        <Teleport to="body">
+<div v-if="manageCauses" class="modal-mask" @click.self="manageCauses = false">
       <div class="modal">
         <h3>错因标签管理</h3>
         <div class="muted" style="margin-bottom: 10px">
@@ -178,28 +199,31 @@
             <div class="spacer"></div>
             <button class="small danger" @click="delCause(c)">删除</button>
           </div>
-          <div class="row" style="gap: 8px">
-            <input v-model="c.name" style="max-width: 160px" />
+          <div style="display: block">
+            <input v-model="c.name" placeholder="标签名" style="max-width: 320px; margin-bottom: 6px" />
             <input v-model="c.description" placeholder="标签说明（AI 分析时参考）" />
-            <button class="small" @click="saveCauseTag(c)">保存</button>
+            <div style="margin-top: 6px"><button class="small" @click="saveCauseTag(c)">保存</button></div>
           </div>
         </div>
         <div class="card" style="margin: 12px 0 0">
           <h3>新建标签</h3>
-          <div class="row" style="gap: 8px">
-            <input v-model="newCause.name" placeholder="标签名，如：题意理解偏差" style="max-width: 200px" />
+          <div style="display: block">
+            <input v-model="newCause.name" placeholder="标签名，如：题意理解偏差" style="max-width: 320px; margin-bottom: 6px" />
             <input v-model="newCause.description" placeholder="说明（推荐填写，供 AI 理解）" />
-            <button class="primary small" @click="addCause">添加</button>
+            <div style="margin-top: 6px"><button class="primary small" @click="addCause">添加</button></div>
           </div>
         </div>
         <div style="text-align: right; margin-top: 12px"><button @click="manageCauses = false">关闭</button></div>
       </div>
     </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
+import WinComboBox from '../winui/components/WinComboBox.vue';
+import WinAutoSuggestBox from '../winui/components/WinAutoSuggestBox.vue';
 import { api } from '../api.js';
 import { STATUS_TEXT, causeColor, masteryLevel, renderMarkdown } from '../util.js';
 import { winConfirm, winAlert, winPrompt } from '../dialogs.js';
@@ -217,10 +241,54 @@ const createError = ref('');
 const cSaving = ref(false);
 const photo = ref(null);
 const filter = reactive({ subject: '', cause: '', status: '', keyword: '' });
+
+// 错题搜索建议：基于已加载题干的文本，随输入实时过滤
+const wrongSuggestions = computed(() => {
+  const q = (filter.keyword || '').trim();
+  return items.value
+    .map((w) => w.question)
+    .filter((t) => t && (!q || t.includes(q)))
+    .slice(0, 8);
+});
+
+function onWrongChosen({ SelectedItem }) {
+  if (!SelectedItem) return;
+  filter.keyword = SelectedItem;
+  load();
+}
 const cform = reactive({ subject: '', examId: '', question: '', options: '', userAnswer: '', correctAnswer: '', errorCause: '', causeNote: '', guide: '' });
 const manageCauses = ref(false);
 const newCause = reactive({ name: '', description: '' });
 const pageLoading = ref(true);
+
+const subjectFilterOptions = computed(() => [
+  { label: '全部科目', value: '' },
+  ...subjects.map((s) => ({ label: s, value: s }))
+]);
+const causeFilterOptions = computed(() => [
+  { label: '全部错因', value: '' },
+  ...causes.value.map((c) => ({ label: c.name, value: c.name }))
+]);
+const causeOptions = computed(() => [
+  { label: '由 AI 判断', value: '' },
+  ...causes.value.map((c) => ({ label: c.name, value: c.name })),
+  { label: '＋ 新建标签…', value: '__new__' }
+]);
+const wrongSubjectOptions = computed(() => [
+  { label: '未知', value: '' },
+  ...subjects.map((s) => ({ label: s, value: s }))
+]);
+const examOptions = computed(() => [
+  { label: '无', value: '' },
+  ...exams.value.map((e) => ({ label: `#${e.id} ${e.subject} ${e.exam_date}`, value: String(e.id) }))
+]);
+const wrongStatusOptions = [
+  { label: '全部状态', value: '' },
+  { label: '待分析', value: 'pending' },
+  { label: '分析中', value: 'analyzing' },
+  { label: '已分析', value: 'done' },
+  { label: '失败', value: 'failed' }
+];
 
 function causeNameOf(c) {
   return typeof c === 'string' ? c : c?.name || '';

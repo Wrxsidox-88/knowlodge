@@ -42,23 +42,34 @@
     </div>
 
     <div class="card">
-      <h3>分析任务（AI 流水线：图片识别 → 分类 → 概览 → 元信息 → 知识抽取 → 向量化 → 并入图谱）</h3>
+      <h3>分析任务（AI 流水线：图片识别 → 概览 → 知识抽取 → 并入图谱 → 结构优化 → 材料分类 → 向量化）</h3>
       <p class="muted" style="margin: -6px 0 10px">
         重新分析默认复用已有的图片识别结果以节省 token；如需重新识别图片，请在"重新分析"弹窗中勾选。
       </p>
       <div v-if="!jobs.length" class="empty">暂无任务</div>
       <table v-else>
         <thead>
-          <tr><th>ID</th><th>材料</th><th>状态</th><th>进度</th><th>阶段</th><th>结果/消息</th><th>更新时间</th></tr>
+          <tr><th>ID</th><th>材料</th><th>状态</th><th>进度</th><th>阶段</th><th>实时输出</th><th>结果/消息</th><th>更新时间</th></tr>
         </thead>
         <tr v-for="j in jobs" :key="j.id">
           <td>{{ j.id }}</td>
           <td>{{ j.material_title }}</td>
           <td><span class="badge" :class="j.status">{{ STATUS_TEXT[j.status] || j.status }}</span></td>
-          <td><div class="progress"><div :style="{ width: j.progress + '%' }"></div></div></td>
+          <td>
+            <span class="job-ring-wrap" :title="`进度 ${Math.max(0, Math.min(100, Number(j.progress) || 0))}%`">
+              <WinProgressRing
+                IsIndeterminate="False"
+                :Value="Math.max(0, Math.min(100, Number(j.progress) || 0))"
+                Maximum="100"
+                Width="26"
+                Height="26" />
+              <span class="ring-value">{{ Math.round(Number(j.progress) || 0) }}%</span>
+            </span>
+          </td>
           <td class="muted">
             <span v-if="j.status === 'running' || j.status === 'queued'" class="loading"></span>{{ j.step }}
           </td>
+          <td><button class="small" @click="openLog(j)">实时输出</button></td>
           <td class="muted">{{ j.message || '-' }}</td>
           <td class="muted">{{ j.updated_at }}</td>
         </tr>
@@ -101,7 +112,8 @@
     </div>
 
     <!-- 开始分析弹窗（待分析/失败材料，含图片）：引导词 + 勾选参与识别的照片 -->
-    <div v-if="startModal" class="modal-mask" @click.self="startModal = null">
+        <Teleport to="body">
+<div v-if="startModal" class="modal-mask" @click.self="startModal = null">
       <div class="modal" style="width: min(580px, 92vw)">
         <h3>开始分析《{{ startModal.title }}》</h3>
         <label class="field">
@@ -120,9 +132,11 @@
         </div>
       </div>
     </div>
+    </Teleport>
 
     <!-- 批量分析弹窗：逐份材料勾选 + 逐份选择参与识别的照片 -->
-    <div v-if="batchModal" class="modal-mask" @click.self="batchModal = null">
+        <Teleport to="body">
+<div v-if="batchModal" class="modal-mask" @click.self="batchModal = null">
       <div class="modal" style="width: min(640px, 92vw)">
         <h3>批量分析（{{ batchItems.length }} 份待分析材料）</h3>
         <p class="muted" style="line-height: 1.7; margin-bottom: 12px">
@@ -157,9 +171,11 @@
         </div>
       </div>
     </div>
+    </Teleport>
 
     <!-- 重新分析确认弹窗：引导词 + 逐张勾选要重新识别的图片 -->
-    <div v-if="reModal" class="modal-mask" @click.self="reModal = null">
+        <Teleport to="body">
+<div v-if="reModal" class="modal-mask" @click.self="reModal = null">
       <div class="modal" style="width: min(580px, 92vw)">
         <h3>重新分析《{{ reModal.title }}》</h3>
         <p class="muted" style="line-height: 1.7; margin-bottom: 12px">
@@ -197,11 +213,47 @@
         </div>
       </div>
     </div>
+    </Teleport>
+
+    <!-- AI 实时输出弹窗：轮询展示该任务分析过程的实时产出 -->
+        <Teleport to="body">
+<div v-if="logModal" class="modal-mask" @click.self="closeLog">
+      <div class="modal log-modal">
+        <h3 style="display: flex; align-items: center; gap: 8px">
+          AI 实时输出 · 任务 #{{ logJobId }}
+          <span v-if="logJobStep" class="muted" style="font-weight: 400; font-size: 12px">{{ logJobStep }}</span>
+          <span class="badge analyzing" v-if="logJobRunning">进行中</span>
+          <span class="badge done" v-else>已结束</span>
+          <div class="spacer"></div>
+          <label class="muted" style="font-size: 12px; display: flex; align-items: center; gap: 4px">
+            <input type="checkbox" v-model="logAutoScroll" />自动滚动
+          </label>
+        </h3>
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px">
+          <span v-if="logBusy" class="loading"></span>
+          <span class="muted" style="font-size: 12px">每 1.5 秒自动刷新</span>
+          <div class="spacer"></div>
+          <button @click="closeLog">关闭</button>
+        </div>
+        <div ref="logBox" class="log-box log-box-live">
+          <div v-if="!logEntries.length" class="muted">暂无实时输出，等待分析开始…</div>
+          <template v-for="(e, i) in logEntries" :key="i">
+            <div class="trl-line">
+              <span class="trl-time">{{ fmtLogTime(e.t) }}</span>
+              <span class="trl-badge" :class="e.kind">{{ e.kind === 'ai' ? 'AI' : e.kind === 'error' ? 'ERR' : 'STP' }}</span>
+              <span class="trl-text" :class="{ 'trl-err': e.kind === 'error' }">{{ e.text }}</span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue';
+import WinProgressRing from '../winui/components/WinProgressRing.vue';
 import { api } from '../api.js';
 import { STATUS_TEXT } from '../util.js';
 import ImagePickList from '../components/ImagePickList.vue';
@@ -398,6 +450,58 @@ function startPolling() {
   }, 1500);
 }
 
+// ---------- AI 实时输出 ----------
+const logModal = ref(false);
+const logJobId = ref(null);
+const logJobRunning = ref(false);
+const logJobStep = ref('');
+const logBusy = ref(false);
+const logAutoScroll = ref(true);
+const logEntries = ref([]);
+const logBox = ref(null);
+let logTimer = null;
+
+function fmtLogTime(iso) {
+  if (!iso) return '';
+  const t = new Date(iso);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;
+}
+
+async function refreshLog() {
+  if (!logJobId.value) return;
+  if (logBusy.value) return;
+  logBusy.value = true;
+  try {
+    const d = await api.getJobLogs(logJobId.value);
+    logEntries.value = (d.logs || []).slice(-400);
+    if (logAutoScroll.value) {
+      nextTick(() => logBox.value?.scrollTo({ top: logBox.value.scrollHeight }));
+    }
+  } catch {
+    /* 静默 */
+  } finally {
+    logBusy.value = false;
+  }
+}
+
+function openLog(j) {
+  logJobId.value = j.id;
+  logEntries.value = [];
+  logJobStep.value = j.step || '';
+  logJobRunning.value = j.status === 'running' || j.status === 'queued';
+  logModal.value = true;
+  refreshLog();
+  clearInterval(logTimer);
+  logTimer = setInterval(refreshLog, 1500);
+}
+
+function closeLog() {
+  logModal.value = false;
+  clearInterval(logTimer);
+  logTimer = null;
+}
+
 onMounted(() => {
   load()
     .catch(() => {})
@@ -406,5 +510,5 @@ onMounted(() => {
       startPolling();
     });
 });
-onUnmounted(() => clearInterval(timer));
+onUnmounted(() => { clearInterval(timer); clearInterval(logTimer); });
 </script>

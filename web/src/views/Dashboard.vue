@@ -4,18 +4,44 @@
     <div v-if="countdowns.length" class="carousel card glass" style="padding: 14px 18px; margin-bottom: 16px">
       <div class="toolbar" style="margin: 0">
         <span class="badge search">倒计时</span>
-        <strong style="font-size: 15px">{{ countdowns[cdIndex].title }}</strong>
-        <span class="cd-time">{{ cdText }}</span>
         <div class="spacer"></div>
-        <span class="muted">{{ cdIndex + 1 }}/{{ countdowns.length }} · 管理请前往系统设置</span>
+        <span class="muted">共 {{ countdowns.length }} 个 · 管理请前往系统设置</span>
+      </div>
+      <div class="carousel-body">
+        <Transition name="cd-slide" mode="out-in">
+          <div :key="cdIndex" class="carousel-slide">
+            <strong style="font-size: 15px">{{ countdowns[cdIndex].title }}</strong>
+            <span class="cd-time">{{ cdText }}</span>
+          </div>
+        </Transition>
+        <WinPipsPager
+          class="carousel-pips"
+          v-model:SelectedPageIndex="cdIndex"
+          :NumberOfPages="countdowns.length"
+          HorizontalAlignment="Center" />
       </div>
     </div>
 
+    <!-- AI 加油站：WinInfoBar（长短消息、可关闭、可含操作按钮）。
+         关闭后本次会话保持关闭（切换页面回来不再显示），刷新页面重新显示 -->
+    <WinInfoBar
+      class="encourage-infobar"
+      v-model:IsOpen="gasOpen"
+      Severity="Success"
+      :Title="encourageTitle"
+      :Message="encourageText || '每一次弄懂错题，都是知识网络亮起的一格。'"
+      IsClosable="True">
+      <template #ActionButton>
+        <WinButton
+          :IsEnabled="!encourageLoading"
+          @Click="refreshEncourage"
+          v-bind="{ 'tooltipservice.tooltip': '换一句鼓励语' }">
+          <WinTextBlock :Text="encourageLoading ? '刷新中…' : '刷新'" />
+        </WinButton>
+      </template>
+    </WinInfoBar>
+
     <div class="toolbar">
-      <span class="badge" :class="data.aiEnabled ? 'done' : 'pending'">
-        AI 模型：{{ data.aiEnabled ? '已接入' : '离线模式（未配置 API Key）' }}
-      </span>
-      <span class="muted">运行 {{ uptime }} | 内存 {{ data.memoryMB }} MB</span>
       <div class="spacer"></div>
       <button class="small" @click="load">刷新</button>
     </div>
@@ -31,24 +57,6 @@
     </div>
 
     <div class="row" style="align-items: stretch">
-      <div class="card encourage-card glass" style="flex: 1.1">
-        <div class="toolbar" style="margin-bottom: 6px">
-          <h3 style="margin: 0">AI 加油站</h3>
-          <span v-if="encourageSource" class="badge" :class="encourageSource === 'ai' ? 'done' : 'pending'">
-            {{ encourageSource === 'ai' ? 'AI 生成' : '离线模板' }}
-          </span>
-          <span v-if="encourageCached" class="muted" style="font-size: 11px">每小时自动更新</span>
-          <div class="spacer"></div>
-          <button class="small" :disabled="encourageLoading" @click="refreshEncourage">
-            <span v-if="encourageLoading" class="loading"></span>换一句
-          </button>
-        </div>
-        <p class="encourage-text">
-          <span v-if="encourageLoading" class="loading"></span>
-          <span v-if="!encourageLoading">{{ encourageText || '每一次弄懂错题，都是知识网络亮起的一格。' }}</span>
-        </p>
-      </div>
-
       <div class="card" style="flex: 2">
         <div class="toolbar" style="margin-bottom: 4px">
           <h3 style="margin: 0">学情概览</h3>
@@ -103,13 +111,18 @@
             <td>#{{ j.id }}</td>
             <td>{{ j.title }}</td>
             <td><span class="badge" :class="j.status">{{ STATUS_TEXT[j.status] || j.status }}</span></td>
-            <td class="muted">{{ j.progress }}% {{ j.step }}</td>
+            <td class="muted">
+              <span class="job-ring-inline">
+                <WinProgressRing
+                  IsIndeterminate="False"
+                  :Value="Math.max(0, Math.min(100, Number(j.progress) || 0))"
+                  Width="18"
+                  Height="18" />
+                {{ Math.round(Number(j.progress) || 0) }}% {{ j.step }}
+              </span>
+            </td>
           </tr>
         </table>
-      </div>
-      <div class="card">
-        <h3>系统日志（最新 {{ data.recentLogs?.length || 0 }} 条）</h3>
-        <pre class="log-box">{{ logText }}</pre>
       </div>
     </div>
   </div>
@@ -117,9 +130,15 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
+import WinProgressRing from '../winui/components/WinProgressRing.vue';
+import WinPipsPager from '../winui/components/WinPipsPager.vue';
+import WinInfoBar from '../winui/components/WinInfoBar.vue';
+import WinButton from '../winui/components/WinButton.vue';
+import WinTextBlock from '../winui/components/WinTextBlock.vue';
 import { api } from '../api.js';
 import { STATUS_TEXT, causeColor } from '../util.js';
 import AnimatedNumber from '../components/AnimatedNumber.vue';
+import { aiGasClosed } from '../dashboardState.js';
 
 const data = ref({});
 const study = ref({});
@@ -130,7 +149,6 @@ const now = ref(Date.now());
 const encourageText = ref('');
 const encourageSource = ref('');
 const encourageLoading = ref(false);
-const encourageCached = ref(false);
 const pageLoading = ref(true);
 let timer = null;
 let cdTimer = null;
@@ -141,20 +159,20 @@ function barColor(v) {
 }
 
 const c = computed(() => data.value.counts || {});
-const uptime = computed(() => {
-  const s = data.value.uptimeSec || 0;
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return h ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+// AI 加油站（InfoBar）开关：桥接模块级关闭状态。
+// 关闭 → 模块状态置位（切换页面回来不再显示）；刷新页面 → 模块重置 → 重新显示
+const gasOpen = computed({
+  get: () => !aiGasClosed.value,
+  set: (v) => {
+    if (!v) aiGasClosed.value = true;
+  }
 });
-const logText = computed(() =>
-  (data.value.recentLogs || [])
-    .slice(-30)
-    .reverse()
-    .map((l) => `[${l.time.slice(11, 19)}] ${l.level} ${l.msg}`)
-    .join('\n')
-);
-
+const encourageTitle = computed(() => {
+  const base = 'AI 加油站';
+  if (encourageSource.value === 'ai') return `${base} · AI 生成`;
+  if (encourageSource.value) return `${base} · 离线模板`;
+  return base;
+});
 const cdText = computed(() => {
   const item = countdowns.value[cdIndex.value];
   if (!item) return '';
@@ -196,7 +214,6 @@ async function loadEncourage() {
     const r = await api.encourage();
     encourageText.value = r.text;
     encourageSource.value = r.source;
-    encourageCached.value = Boolean(r.cached);
   } catch {
     encourageText.value = '';
   } finally {
@@ -210,7 +227,6 @@ async function refreshEncourage() {
     const r = await api.encourageRefresh();
     encourageText.value = r.text;
     encourageSource.value = r.source;
-    encourageCached.value = false;
   } catch {
     encourageText.value = '';
   } finally {

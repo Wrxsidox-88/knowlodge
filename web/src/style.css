@@ -14,7 +14,7 @@
 @font-face {
   font-family: 'WinUIOnWebIcons';
   src: url('./winui/assets/Fonts/SEGOEICONS.TTF') format('truetype');
-  font-display: block;
+  font-display: swap;
 }
 
 /* 全局顶部加载进度条：请求有延迟时显示（api.js 控制 .on 类） */
@@ -256,6 +256,23 @@ a:hover {
   padding: 20px 28px 40px;
 }
 
+/* 右侧内容区底部白色补偿块：
+   抵消屏幕底部高度判断误差导致的底部内容被遮挡。
+   滚动到底后内容下方留有一小块白，浅色主题为纯白，深色主题跟随卡片背景。 */
+.content-bottom-space {
+  flex-shrink: 0;
+  height: 48px;
+  margin-top: 8px;
+  border-radius: 8px;
+  background: var(--content-bottom-space, #ffffff);
+}
+html.theme-light .content-bottom-space {
+  background: #ffffff;
+}
+html.theme-dark .content-bottom-space {
+  background: var(--card-bg);
+}
+
 /* 页面标题（仿 WinUI PageHeader） */
 .page-title {
   font-size: 24px;
@@ -346,6 +363,55 @@ a:hover {
   flex-shrink: 0;
 }
 
+.tb-user-chevron {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-left: 2px;
+}
+
+/* 顶部账户卡片（WinMenuFlyout 自定义内容） */
+.account-flyout {
+  width: 248px;
+  padding: 4px;
+}
+.account-flyout .af-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px 12px;
+}
+.account-flyout .af-avatar {
+  width: 46px;
+  height: 46px;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+.account-flyout .af-meta {
+  min-width: 0;
+}
+.account-flyout .af-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-flyout .af-role {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+.account-flyout .af-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px 10px;
+}
+.account-flyout .af-actions button {
+  width: 100%;
+}
+
 .titlebar-user a {
   color: var(--text-secondary);
   font-size: 12px;
@@ -396,6 +462,417 @@ a:hover {
 .row > * {
   flex: 1;
   min-width: 0;
+}
+
+/* ===== 单列布局（UI 升级：设置项一列排下、整页纵向滑动） ===== */
+.col-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.col-stack > .card,
+.col-stack > .win-expander {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 单列表单字段：限制控件宽度，避免全宽拉伸过长 */
+.col-stack label.field,
+.col-stack .field {
+  max-width: 780px;
+}
+.col-stack label.field > input,
+.col-stack label.field > select,
+.col-stack label.field > textarea {
+  max-width: 780px;
+}
+
+/* 设置页顶部账户信息（Windows 11 设置 > 账户：扁平、不折叠、无卡片包裹） */
+.account-section {
+  padding: 4px 2px 18px;
+  border-bottom: 1px solid var(--stroke-divider);
+  margin-bottom: 14px;
+}
+.account-section .account-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.account-section .account-avatar {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: var(--accent-base);
+  color: var(--accent-text);
+  font-size: 26px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.account-section .account-name {
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--text);
+}
+.account-section .account-sub {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+}
+.account-section .account-edit {
+  max-width: 620px;
+}
+.account-section .account-frame {
+  display: flex;
+  gap: 32px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.account-section .account-main {
+  flex: 1 1 360px;
+  min-width: 0;
+}
+/* 右侧系统信息（系统/服务器/Node 版本、内存占用） */
+.account-section .account-sys {
+  flex: 0 1 300px;
+  min-width: 240px;
+  border-left: 1px solid var(--stroke-divider);
+  padding-left: 28px;
+}
+.account-section .as-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+.account-section .as-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--stroke-divider);
+  font-size: 13px;
+}
+.account-section .as-row .k {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.account-section .as-row span:last-child {
+  color: var(--text);
+  text-align: right;
+  word-break: break-all;
+}
+/* 系统信息行点击：短暂高亮动画（一闪即过） */
+.account-section .as-row {
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s ease, transform 0.08s ease;
+}
+.account-section .as-row:active {
+  background: var(--subtle-fill);
+  transform: scale(0.99);
+}
+.account-section .as-row.row-flash {
+  animation: rowFlash 0.35s ease;
+}
+@keyframes rowFlash {
+  0% { background: var(--accent-soft, rgba(0, 0, 0, 0.06)); }
+  60% { background: var(--accent-soft, rgba(0, 0, 0, 0.06)); }
+  100% { background: transparent; }
+}
+
+/* 开发者选项 */
+.dev-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dev-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+}
+.dev-row + .dev-row {
+  border-top: 1px solid var(--stroke-divider);
+}
+.dev-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+}
+.dev-row button {
+  flex-shrink: 0;
+}
+
+/* 日志弹窗 */
+.log-modal {
+  width: min(780px, 94vw);
+  height: min(72vh, 620px);
+  display: flex;
+  flex-direction: column;
+}
+.log-box-live {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+/* AI 实时输出弹窗：流水线日志行 */.trl-line {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--stroke-divider, rgba(128, 128, 128, 0.12));
+}
+.trl-line .trl-time {
+  color: var(--text-secondary, #888);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.trl-badge {
+  flex-shrink: 0;
+  width: 34px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 1px 0;
+  border-radius: 4px;
+  color: #fff;
+}
+.trl-badge.step { background: #5b9bd5; }
+.trl-badge.ai { background: var(--accent-base, #0078d4); }
+.trl-badge.error { background: #d9534f; }
+.trl-text { color: var(--text, #1f1f1f); }
+.trl-text.trl-err { color: #d9534f; }
+
+/* 家密码弹窗：密码框 + 旁勾选框（显示密码） */
+.pw-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pw-row .win-password-box,
+.pw-row .win-textbox {
+  flex: 1;
+  min-width: 0;
+}
+.pw-row .win-checkbox {
+  flex-shrink: 0;
+}
+
+/* 版本与更新：更新文件列表 */
+.upd-diff-list {
+  margin-top: 6px;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.upd-diff-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--border);
+}
+.upd-diff-item:last-child {
+  border-bottom: none;
+}
+.upd-diff-path {
+  font-family: var(--mono, ui-monospace, Consolas, monospace);
+  word-break: break-all;
+  color: var(--text);
+}
+
+/* Windows 设置风格：折叠分组卡片（配合 WinExpander） */
+.win-expander.settings-expander {
+  border-radius: 8px;
+  margin-bottom: 14px;
+  background: var(--card-bg);
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.win-expander.settings-expander .win-expander-header {
+  min-height: 54px;
+}
+.win-expander.settings-expander .win-expander-header-icon {
+  font-size: 17px;
+  color: var(--accent-base);
+}
+.win-expander.settings-expander .win-expander-header-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.win-expander.settings-expander .win-expander-content {
+  padding: 2px 18px 18px;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Windows 设置风格：设置行开关（左标题/描述 + 右 WinToggleSwitch） */
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  max-width: 780px;
+  border: 1px solid var(--card-stroke);
+  border-radius: 8px;
+  background: var(--card-bg-secondary, var(--card-bg));
+}
+.settings-toggle-row .settings-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.settings-toggle-row .settings-toggle-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.settings-toggle-row .settings-toggle-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+/* 工具栏内联开关（如知识清单"允许 AI 编辑"） */
+.inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.inline-toggle-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ===== 设置页 · 关于（Windows 系统信息风格） ===== */
+.about-header {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+.about-app {
+  min-width: 0;
+}
+.about-app-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+.about-app-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 2px 0 6px;
+}
+.about-app-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+.about-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 14px 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.about-specs {
+  border: 1px solid var(--card-stroke);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.about-spec {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.about-spec:nth-child(odd) {
+  background: var(--subtle-secondary);
+}
+.about-spec > span:first-child {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.about-spec > span:last-child {
+  color: var(--text-primary);
+  text-align: right;
+}
+.about-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.about-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--card-stroke);
+  border-radius: 8px;
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: background 0.2s, border-color 0.2s;
+}
+.about-link:hover {
+  background: var(--subtle-secondary);
+  border-color: var(--accent-base);
+}
+.about-link .gh-icon {
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+.about-link:hover .gh-icon {
+  color: var(--accent-base);
+}
+.about-link-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.about-link-text strong {
+  font-size: 13px;
+  color: var(--accent);
+}
+.about-link-text small {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.about-link-arrow {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.about-footer {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.6;
 }
 
 .grid-stats {
@@ -711,7 +1188,9 @@ tr:hover td {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  /* 弹窗层置于最上层，覆盖页眉（含颜色切换/账户区/系统名称），弹窗整体正常全屏居中，
+     不再下移，消除内容被遮挡的问题 */
+  z-index: 10000;
   animation: modal-fade-in var(--fast-duration) var(--fast-out-slow-in);
 }
 
@@ -820,6 +1299,13 @@ pre.log-box {
   line-height: 1.85;
   font-size: 14px;
   color: var(--text-primary);
+}
+
+/* 流式输出期间的纯文本展示：零 Markdown/LaTeX 渲染，保持主线程空闲可滚动 */
+.md-plain {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .md-body h2,
@@ -1214,6 +1700,57 @@ sup.cite {
   font-size: 14px;
 }
 
+/* 首页倒计时轮播：动画切换 + 分页点 */
+.carousel-body {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 8px;
+}
+.carousel-slide {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-height: 26px;
+}
+.carousel-pips {
+  display: flex;
+  justify-content: center;
+  margin-top: 2px;
+}
+.cd-slide-enter-active,
+.cd-slide-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.cd-slide-enter-from {
+  opacity: 0;
+  transform: translateY(12px);
+}
+.cd-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-12px);
+}
+
+/* 分析任务确定进度环 */
+.job-ring-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.job-ring-wrap .ring-value {
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-width: 34px;
+}
+.job-ring-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .fig-svg {
   width: 240px;
   height: 240px;
@@ -1506,14 +2043,105 @@ sup.cite {
   }
 }
 
-.encourage-card {
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent-2) 14%, transparent), color-mix(in srgb, var(--accent-base) 12%, transparent));
-  border: 1px solid color-mix(in srgb, var(--accent-2) 35%, transparent);
+/* 页面切换动画（Windows 设置 > 外观与动画 可配置，共 8 种，对应参考页过渡类型） */
+.page-slide-right-enter-active,
+.page-slide-right-leave-active {
+  transition: transform 0.32s ease, opacity 0.32s ease;
+  will-change: transform, opacity;
+}
+.page-slide-right-enter-from {
+  transform: translateX(100%);
+  opacity: 0;
+}
+.page-slide-right-leave-to {
+  transform: translateX(-14%);
+  opacity: 0;
 }
 
-.encourage-text {
-  font-size: 15px;
-  line-height: 1.9;
+.page-slide-left-enter-active,
+.page-slide-left-leave-active {
+  transition: transform 0.32s ease, opacity 0.32s ease;
+  will-change: transform, opacity;
+}
+.page-slide-left-enter-from {
+  transform: translateX(-100%);
+  opacity: 0;
+}
+.page-slide-left-leave-to {
+  transform: translateX(14%);
+  opacity: 0;
+}
+
+/* 默认 / 通用：淡入为主，通用带轻微上移 */
+.page-default-enter-active,
+.page-default-leave-active,
+.page-common-enter-active,
+.page-common-leave-active {
+  transition: opacity 0.2s ease;
+}
+.page-default-enter-from,
+.page-default-leave-to,
+.page-common-enter-from,
+.page-common-leave-to {
+  opacity: 0;
+}
+.page-common-enter-active {
+  transition: opacity 0.24s ease, transform 0.24s ease;
+}
+.page-common-enter-from {
+  transform: translateY(10px);
+}
+
+/* 进入：从下方上浮进入（EntranceNavigationTransitionInfo） */
+.page-entrance-enter-active,
+.page-entrance-leave-active {
+  transition: opacity 0.28s ease, transform 0.28s ease;
+  will-change: transform, opacity;
+}
+.page-entrance-enter-from {
+  opacity: 0;
+  transform: translateY(24px);
+}
+.page-entrance-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+/* 钻取：轻量右入 + 淡入（DrillInNavigationTransitionInfo） */
+.page-drillin-enter-active,
+.page-drillin-leave-active {
+  transition: opacity 0.26s ease, transform 0.26s ease;
+}
+.page-drillin-enter-from {
+  opacity: 0;
+  transform: translateX(16px);
+}
+.page-drillin-leave-to {
+  opacity: 0;
+  transform: translateX(-8px);
+}
+
+/* 连续：跟随点击元素缩放淡入（ContinuumNavigationTransitionInfo 简化） */
+.page-continuum-enter-active,
+.page-continuum-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.page-continuum-enter-from {
+  opacity: 0;
+  transform: scale(0.94);
+}
+.page-continuum-enter-to {
+  opacity: 1;
+  transform: scale(1);
+}
+.page-continuum-leave-to {
+  opacity: 0;
+  transform: scale(0.98);
+}
+
+/* 首页 AI 加油站（WinInfoBar）：置于倒计时下方 */
+.encourage-infobar {
+  margin-bottom: 14px;
 }
 
 .mastery-bar-row {
@@ -1705,6 +2333,33 @@ sup.cite {
   background: var(--subtle-secondary);
 }
 
+/* 重分析弹窗：照片缩略图预览（滚动进入视口后自动加载） */
+.reimg-thumb {
+  width: 84px;
+  height: 56px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 4px;
+  border: 1px solid var(--stroke-divider);
+  background: var(--ctrl-fill-input-active);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.reimg-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.reimg-thumb-placeholder {
+  color: var(--text-secondary);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .reimg-item input {
   width: auto;
   flex-shrink: 0;
@@ -1790,3 +2445,22 @@ input[type='radio'] {
   font-family: 'WinUIOnWebIcons', 'Segoe UI', sans-serif;
   font-weight: normal;
 }
+/* Token 计量弹窗 */
+.meter-modal { width: min(660px, 94vw); max-height: 88vh; display: flex; flex-direction: column; }
+.meter-modal .badge.muted { background: rgba(128,128,128,.18); color: #888; }
+.meter-kpis { display: flex; gap: 12px; margin: 10px 0 8px; }
+.meter-kpi { flex: 1; background: var(--surface-elevated, rgba(0,0,0,.03)); border: 1px solid rgba(128,128,128,.15); border-radius: 8px; padding: 10px 12px; }
+.meter-kpi .l { display: block; font-size: 11px; color: var(--text-secondary, #888); }
+.meter-kpi .v { font-size: 20px; font-weight: 600; }
+.meter-progress { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 10px; }
+.meter-progress-track { height: 8px; background: rgba(128,128,128,.18); border-radius: 4px; overflow: hidden; }
+.meter-progress-fill { height: 100%; background: var(--accent-base, #0078d4); }
+.meter-section-title { margin: 12px 0 6px; font-weight: 600; font-size: 13px; }
+.meter-chart { border: 1px solid rgba(128,128,128,.12); border-radius: 8px; padding: 6px; }
+.meter-empty { padding: 30px; text-align: center; color: #888; font-size: 12px; }
+.meter-perf { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12px; color: #555; }
+.meter-perf b { color: var(--text-primary, #1f1f1f); }
+.meter-rows .form-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.meter-rows .form-row > span { width: 96px; flex-shrink: 0; font-size: 12px; color: #666; }
+.meter-rows input, .meter-rows select { min-width: 0; }
+.meter-rows.disabled, .meter-chart.disabled { opacity: .5; pointer-events: none; }

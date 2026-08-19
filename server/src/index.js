@@ -8,6 +8,9 @@ import { loadIndex } from './services/vectorStore.js';
 import { authRequired } from './middleware/auth.js';
 import { notFound, errorHandler, requestLogger } from './middleware/error.js';
 import { authRouter } from './routes/auth.js';
+import { devRouter } from './routes/dev.js';
+import { usagemeterRouter } from './routes/usagemeter.js';
+import { updateRouter } from './routes/update.js';
 import { materialsRouter } from './routes/materials.js';
 import { analysisRouter } from './routes/analysis.js';
 import { graphRouter } from './routes/graph.js';
@@ -26,6 +29,7 @@ import { systemRouter } from './routes/system.js';
 import { documentsRouter } from './routes/documents.js';
 import { mindmapsRouter } from './routes/mindmaps.js';
 import { encourageTick } from './services/study.js';
+import { startUpdateScheduler } from './services/updater.js';
 
 const app = express();
 
@@ -50,6 +54,9 @@ app.use('/api/study', studyRouter);
 app.use('/api/countdowns', countdownsRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/figure', figuresRouter);
+app.use('/api/dev', devRouter);
+app.use('/api/usagemeter', usagemeterRouter);
+app.use('/api/update', updateRouter);
 app.use('/api/lists', listsRouter);
 app.use('/api/system', systemRouter);
 app.use('/api/documents', documentsRouter);
@@ -70,6 +77,7 @@ app.use(errorHandler);
 loadIndex();
 
 setInterval(encourageTick, 3600 * 1000);
+startUpdateScheduler();
 
 app.listen(PORT, () => {
   logger.info(`后端服务已启动: http://localhost:${PORT}`);

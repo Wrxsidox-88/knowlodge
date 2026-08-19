@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
-import { createJob, runAnalysis, runBatchAnalysis } from '../services/analyzer.js';
+import { createJob, runAnalysis, runBatchAnalysis, getJobTrace } from '../services/analyzer.js';
 
 export const analysisRouter = Router();
 
@@ -89,4 +89,12 @@ analysisRouter.get('/jobs/:id', (req, res) => {
   const row = db.prepare('SELECT * FROM analysis_jobs WHERE id = ?').get(Number(req.params.id));
   if (!row) return res.status(404).json({ error: '任务不存在' });
   res.json(row);
+});
+
+// 分析实时输出（AI 逐步骤日志），供前端"实时输出"面板轮询
+analysisRouter.get('/jobs/:id/logs', (req, res) => {
+  const jobId = Number(req.params.id);
+  const row = db.prepare('SELECT id FROM analysis_jobs WHERE id = ?').get(jobId);
+  if (!row) return res.status(404).json({ error: '任务不存在' });
+  res.json({ logs: getJobTrace(jobId) });
 });

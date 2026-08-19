@@ -25,6 +25,8 @@ AI_EMBED_MODEL=text-embedding-3-small
 AI_VISION_MODEL=
 STUDY_AUTO_ANALYZE=on
 LISTS_AI_AUTOCREATE=off
+# 允许 AI 分析时直接修改现有子知识网（on=注入已有图谱由 AI 决定并入或新建；off=每次均新建独立子网）
+AI_MODIFY_SUBGRAPHS=on
 `;
 
 if (!fs.existsSync(ENV_PATH)) {

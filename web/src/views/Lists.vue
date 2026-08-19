@@ -1,7 +1,7 @@
 <template>
   <div v-if="pageLoading" class="page-loading"><span class="loading"></span>正在加载数据…</div>
-  <div v-else class="row" style="align-items: flex-start">
-    <div class="card" style="max-width: 360px">
+  <div v-else class="col-stack">
+    <div class="card">
       <div class="toolbar" style="margin-bottom: 8px">
         <h3 style="margin: 0">知识清单</h3>
         <div class="spacer"></div>
@@ -9,33 +9,42 @@
         <button class="small primary" @click="createNote(null)">新建清单</button>
       </div>
       <div v-if="!tree.length" class="empty">暂无清单，点击"新建清单"开始</div>
-      <div v-for="n in tree" :key="n.id">
-        <ListRow
-          :node="n"
-          :depth="0"
-          :selectedId="selectedId"
-          @select="select"
-          @refresh="load"
-          @create-note="createNote"
-          @create-folder="createFolder"
-          @remove="removeNode"
-        />
-      </div>
+      <WinTreeView
+        v-else
+        v-model:ItemsSource="tree"
+        SelectionMode="Single"
+        style="max-height: 400px; overflow: auto"
+        @ItemInvoked="onTreeInvoked">
+        <template #item="{ item }">
+          <div style="display: flex; align-items: center; gap: 6px; min-width: 0">
+            <span class="tree-icon" :class="item.kind === 'folder' ? 'folder' : 'file'" aria-hidden="true"></span>
+            <WinTextBlock class="tree-node-name" :Text="item.name" />
+            <span v-if="item.ai_editable" class="badge done" style="font-size: 10px; flex-shrink: 0">AI</span>
+            <span class="row-actions" style="margin-left: auto; flex-shrink: 0" @click.stop>
+              <button v-if="item.kind === 'folder'" class="row-action" type="button" @click.stop="createNote(item.id)" title="在此目录下新建清单">＋清单</button>
+              <button v-if="item.kind === 'folder'" class="row-action" type="button" @click.stop="createFolder(item.id)" title="在此目录下新建子目录">＋目录</button>
+              <button class="row-action danger" type="button" @click.stop="removeNode(item)" :title="item.kind === 'folder' ? '删除目录（含其下全部内容）' : '删除清单'">✕</button>
+            </span>
+          </div>
+        </template>
+      </WinTreeView>
       <div class="muted" style="margin-top: 10px; font-size: 12px; line-height: 1.7">
-        · 内容为 Markdown，支持公式渲染；悬停目录可新建子项或删除<br />
-        · 开启"允许 AI 编辑"后，AI 在对话/分析中可修改该清单<br />
+        · 目录可展开/折叠；悬停节点显示「＋清单/＋目录/✕」操作（点击不会误触展开）<br />
+        · 节点左侧图标或文字可选中清单；点击目录图标三角展开/折叠<br />
+        · 内容为 Markdown，支持公式渲染；顶部按钮可新建根目录/根清单<br />
+        · 开启"允许 AI 编辑"后，AI 在对话/分析中可修改该清单
         · AI 分析时按需创建清单：见系统设置开关{{ aiAutocreate ? '（已开启）' : '（已关闭）' }}
       </div>
     </div>
 
-    <div class="card" style="flex: 2">
+    <div class="card">
       <template v-if="current">
         <div class="toolbar">
           <input v-model="form.name" style="max-width: 240px" placeholder="名称" />
-          <label class="toggle-label">
-            <input type="checkbox" v-model="form.aiEditable" />
-            允许 AI 编辑
-          </label>
+          <span class="inline-toggle">
+            <span class="inline-toggle-label">允许 AI 编辑</span>
+            <WinToggleSwitch :IsOn="form.aiEditable" @update:IsOn="form.aiEditable = $event" />
+          </span>
           <div class="spacer"></div>
           <button class="small danger" @click="remove">删除</button>
           <button class="primary small" :disabled="saving" @click="save">
@@ -59,13 +68,16 @@
         ></textarea>
         <div v-else class="md-body" style="min-height: 360px; border: 1px solid var(--border); border-radius: 8px; padding: 14px" v-html="md(form.content || '（空清单）')"></div>
       </template>
-      <div v-else class="empty">选择左侧清单查看/编辑</div>
+      <div v-else class="empty">选择上方清单查看/编辑</div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, h, defineComponent, onMounted } from 'vue';
+import { ref, reactive, onMounted } from 'vue';
+import WinToggleSwitch from '../winui/components/WinToggleSwitch.vue';
+import WinTreeView from '../winui/components/WinTreeView.vue';
+import WinTextBlock from '../winui/components/WinTextBlock.vue';
 import { api } from '../api.js';
 import { renderMarkdown } from '../util.js';
 import { winConfirm, winAlert, winPrompt } from '../dialogs.js';
@@ -80,65 +92,11 @@ const aiAutocreate = ref(false);
 const pageLoading = ref(true);
 const form = reactive({ name: '', description: '', content: '', aiEditable: false });
 
-const ListRow = defineComponent({
-  name: 'ListRow',
-  props: { node: Object, depth: Number, selectedId: Number },
-  emits: ['select', 'refresh', 'createNote', 'createFolder', 'remove'],
-  setup(props, { emit }) {
-    const open = ref(true);
-    const action = (label, title, fn, cls = 'row-action') =>
-      h('button', {
-        class: cls,
-        title,
-        style: 'margin-left: 4px',
-        onClick: (e) => {
-          e.stopPropagation();
-          fn();
-        }
-      }, label);
-    return () => {
-      const n = props.node;
-      const isFolder = n.kind === 'folder';
-      const row = h(
-        'div',
-        {
-          class: 'node-row list-row' + (props.selectedId === n.id ? ' selected' : ''),
-          style: { marginLeft: props.depth * 16 + 'px' },
-          onClick: () => emit('select', n)
-        },
-        [
-          isFolder
-            ? h('span', { class: 'muted', style: 'cursor:pointer; margin-right: 4px', onClick: (e) => { e.stopPropagation(); open.value = !open.value; } }, open.value ? '▾' : '▸')
-            : h('span', { class: 'dot' }),
-          h('span', n.name),
-          n.aiEditable ? h('span', { class: 'badge done', style: 'margin-left: 6px; font-size: 10px' }, 'AI') : null,
-          h('span', { class: 'row-actions', style: 'margin-left: auto' }, [
-            ...(isFolder
-              ? [
-                  action('＋文档', '在此目录下新建清单', () => emit('createNote', n.id)),
-                  action('＋目录', '在此目录下新建子目录', () => emit('createFolder', n.id))
-                ]
-              : []),
-            action('✕', isFolder ? '删除目录（含其下全部内容）' : '删除清单', () => emit('remove', n), 'row-action danger')
-          ])
-        ]
-      );
-      const children = isFolder && open.value
-        ? (n.children || []).map((c) => h(ListRow, {
-            node: c,
-            depth: props.depth + 1,
-            selectedId: props.selectedId,
-            onSelect: (x) => emit('select', x),
-            onRefresh: () => emit('refresh'),
-            onCreateNote: (id) => emit('createNote', id),
-            onCreateFolder: (id) => emit('createFolder', id),
-            onRemove: (x) => emit('remove', x)
-          }))
-        : [];
-      return h('div', [row, ...children]);
-    };
-  }
-});
+// WinTreeView 节点被点击：目录由组件自行展开/折叠，仅清单（笔记）载入编辑
+function onTreeInvoked({ InvokedItem: n }) {
+  if (!n || n.kind !== 'note') return;
+  select(n);
+}
 
 async function load() {
   const r = await api.listsTree();
@@ -246,15 +204,34 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.list-row {
-  display: flex;
-  align-items: center;
+.tree-node-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
+/* 与参考页同款：专用字体图标（Segoe MDL2 字码），文件夹 \E8B7 / 文档 \E8A5 */
+.tree-icon {
+  width: 20px;
+  font-size: 16px;
+  flex-shrink: 0;
+  font-family: 'WinUIOnWebIcons', 'Segoe MDL2 Assets', 'Segoe UI', sans-serif;
+}
+.tree-icon.folder::before {
+  content: '\E8B7';
+}
+.tree-icon.file::before {
+  content: '\E8A5';
+}
+
+/* 树行内操作按钮：悬停显示，点击不冒泡（不影响展开/选中） */
 .row-actions {
   display: none;
   white-space: nowrap;
 }
-.list-row:hover .row-actions {
+.win-tree-view .tree-item:hover .row-actions {
   display: inline-flex;
 }
 .row-action {

@@ -162,5 +162,8 @@ export default {
   "control.infobadge.icon": "通知",
   "control.infobadge.dot": "新通知",
   "control.infobar.close-button-name": "关闭",
-  "control.infobar.close-button-tooltip": "关闭"
+  "control.infobar.close-button-tooltip": "关闭",
+  "control.datepicker.month": "月",
+  "control.datepicker.day": "日",
+  "control.datepicker.year": "年"
 };

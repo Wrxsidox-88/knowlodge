@@ -14,10 +14,13 @@
       <div class="card">
         <div class="toolbar" style="margin-bottom: 4px">
           <h3 style="margin: 0">薄弱知识点雷达图</h3>
-          <select v-model="subject" style="width: 130px" @change="load">
-            <option value="">全部科目</option>
-            <option v-for="s in data.subjects || []" :key="s">{{ s }}</option>
-          </select>
+          <WinComboBox
+            :ItemsSource="subjectOptions"
+            DisplayMemberPath="label"
+            SelectedValuePath="value"
+            v-model:SelectedValue="subject"
+            @SelectionChanged="load"
+            Width="150" />
         </div>
         <div v-if="!radarHasData" class="empty">录入并分析错题后生成雷达图</div>
         <div v-else ref="radarEl" style="height: 340px"></div>
@@ -85,6 +88,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { api } from '../api.js';
+import WinComboBox from '../winui/components/WinComboBox.vue';
 import echarts, { CHART_COLORS, AXIS_STYLE, chartPalette } from '../charts.js';
 import { CAUSE_COLORS, masteryLevel, causeColor } from '../util.js';
 
@@ -98,6 +102,10 @@ const causeEl = ref(null);
 const weakEl = ref(null);
 const trendEl = ref(null);
 const charts = [];
+const subjectOptions = computed(() => [
+  { label: '全部科目', value: '' },
+  ...((data.value.subjects) || []).map((s) => ({ label: s, value: s }))
+]);
 
 const radarHasData = computed(() => (data.value.radar?.indicators?.length || 0) > 0);
 const weakHeight = computed(() => Math.max(220, (data.value.weakNodes?.length || 0) * 34 + 60));

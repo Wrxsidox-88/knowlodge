@@ -1,14 +1,14 @@
 <template>
   <div v-if="pageLoading" class="page-loading"><span class="loading"></span>正在加载数据…</div>
-  <div v-else class="row" style="align-items: flex-start">
-    <!-- 左侧：脑图列表 -->
-    <div class="card" style="max-width: 300px">
+  <div v-else class="col-stack">
+    <!-- 顶部：脑图列表 -->
+    <div class="card">
       <div class="toolbar" style="margin-bottom: 8px">
         <h3 style="margin: 0">脑图</h3>
         <div class="spacer"></div>
         <button class="primary small" @click="createMap">新建脑图</button>
       </div>
-      <div v-if="!maps.length" class="empty">暂无脑图。可手动新建，或在右侧用 AI 引导生成</div>
+      <div v-if="!maps.length" class="empty">暂无脑图。可手动新建，或在下方用 AI 引导生成</div>
       <div
         v-for="m in maps"
         :key="m.id"
@@ -28,8 +28,8 @@
       </div>
     </div>
 
-    <!-- 右侧：编辑器 -->
-    <div class="card" style="flex: 1; min-width: 0">
+    <!-- 下方：编辑器 -->
+    <div class="card">
       <template v-if="current">
         <div class="toolbar">
           <input v-model="current.name" placeholder="脑图名称" style="max-width: 200px" />
@@ -63,7 +63,8 @@
     </div>
 
     <!-- AI 生成弹窗 -->
-    <div v-if="aiModal" class="modal-mask" @click.self="aiModal = false">
+        <Teleport to="body">
+<div v-if="aiModal" class="modal-mask" @click.self="aiModal = false">
       <div class="modal">
         <h3>AI 引导生成脑图</h3>
         <label class="field">
@@ -91,9 +92,11 @@
         </div>
       </div>
     </div>
+    </Teleport>
 
     <!-- 引用选择弹窗（为某个节点设置引用） -->
-    <div v-if="refPicker" class="modal-mask" @click.self="refPicker = null">
+        <Teleport to="body">
+<div v-if="refPicker" class="modal-mask" @click.self="refPicker = null">
       <div class="modal">
         <h3>为节点「{{ refPicker.text }}」添加引用</h3>
         <div class="tabs">
@@ -113,6 +116,7 @@
         </div>
       </div>
     </div>
+    </Teleport>
   </div>
 </template>
 

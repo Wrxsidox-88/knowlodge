@@ -1367,6 +1367,9 @@ const onGroupHeaderClick = (item, invokeItem = true) => {
         items.push({ Text: child.label, Value: child.value, Icon: child.icon, IsEnabled: child.isEnabled });
       }
       flyoutItems.value = items;
+      // 强制重开：确保 WinMenuFlyout 的 Open watch 每次都触发（避免
+      // 快速连点/状态残留导致 flyout 不显示）
+      if (flyoutOpen.value) flyoutOpen.value = false;
       flyoutOpen.value = true;
       emit('Expanding', { ExpandingItemContainer: item.source, ExpandingItem: item.source });
       groupChevrons[item.value] = 'chevron-open';
@@ -3756,6 +3759,12 @@ watch(() => props.selectedValue, (val) => {
   .win-menu-flyout:has(.win-nav-more-panel) {
     --flyout-scroll-max-height: calc(var(--flyout-max-height, 70vh) - 6px);
     padding: 2px 0;
+  }
+
+  /* 收起态（紧凑图标列）：隐藏分组箭头，整行仅保留图标，点击整行弹出子菜单 */
+  .win-nav-left-panel.is-closed-compact .win-nav-group-header .win-nav-group-chevron,
+  .win-nav-left-panel.is-closed-compact .win-nav-group-chevron {
+    display: none !important;
   }
 
   @media (prefers-reduced-motion: reduce) {

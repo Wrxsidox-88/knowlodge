@@ -1,8 +1,8 @@
 <template>
   <div>
     <div v-if="pageLoading" class="page-loading"><span class="loading"></span>正在加载数据…</div>
-    <div class="row" style="align-items: flex-start">
-      <div class="card" style="flex: 1.6">
+    <div class="col-stack">
+      <div class="card">
         <h3>变式训练（针对薄弱考点）</h3>
         <div v-if="error" class="error-box">{{ error }}</div>
         <div class="toolbar">
@@ -85,7 +85,7 @@
         </template>
       </div>
 
-      <div class="card" style="flex: 1">
+      <div class="card">
         <h3>练习记录（可回放 / 继续作答）</h3>
         <div v-if="!history.length" class="empty">暂无记录</div>
         <table v-else>

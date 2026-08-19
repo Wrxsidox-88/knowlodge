@@ -268,6 +268,8 @@ const LARGE_PAGE_H = LARGE_ROW_H * LARGE_PAGE_ROWS;
 const MONTH_PAGE_ROWS = 3;
 const MONTH_PAGE_H = LARGE_ROW_H * MONTH_PAGE_ROWS;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const clampYear = (y) => Math.max(MIN_YEAR, Math.min(MAX_YEAR, y));
+const absMonthOf = (y, m) => (clampYear(y) - MIN_YEAR) * 12 + m;
 
 const dateSerial = (y, m, d) => Math.floor(Date.UTC(y, m, d) / DAY_MS);
 const weekdayOfSerial = (serial) => (new Date(serial * DAY_MS).getUTCDay() - firstDayIndex + 7) % 7;
@@ -299,14 +301,18 @@ const monthMeta = (() => {
   };
 })();
 
-const dayScrollTop = ref(0);
+const initialDayTop = (() => {
+  const meta = monthMeta.data[absMonthOf(todayYear, todayMonth)];
+  return meta ? meta.startRow * ROW_H : 0;
+})();
+const dayScrollTop = ref(initialDayTop);
 const dayRenderTop = ref(0);
 const dayRenderCells = ref([]);
 const dayTotalHeight = computed(() => monthMeta.totalRows * ROW_H);
 
 const computeDayView = () => {
   const st = dayScrollTop.value;
-  const scrollH = 240;
+  const scrollH = dayScrollEl.value?.ViewportHeight || 240;
   const startRow = Math.max(0, Math.floor(st / ROW_H) - 4);
   const endRow = Math.min(monthMeta.totalRows, Math.floor((st + scrollH) / ROW_H) + 5);
   dayRenderTop.value = startRow * ROW_H;
@@ -549,26 +555,26 @@ const setViewerTop = (viewer, top, smooth = false) => {
   else viewer?.ScrollTo?.(0, top);
 };
 
-const absMonthOf = (y, m) => (y - MIN_YEAR) * 12 + m;
-
 const scrollDayTo = (y, m, smooth = false) => {
   const idx = absMonthOf(y, m);
   const meta = monthMeta.data[idx];
   if (!meta) return;
   const top = meta.startRow * ROW_H;
+  // 1) 立即同步：更新标题并渲染目标月份内容（不依赖滚动容器是否就绪，
+  //    避免停在起始月 1920 却无法显示其他日期）
+  headerYear.value = clampYear(y);
+  headerMonth.value = ((m % 12) + 12) % 12;
+  dayScrollTop.value = top;
+  computeDayView();
+  // 2) 布局就绪后滚动容器（平滑滚动需要容器元素支持 scrollTo）
   afterScrollLayout(() => {
     if (!dayScrollEl.value) return;
-    if (smooth) setViewerTop(dayScrollEl.value, top, true);
-    else {
-      setViewerTop(dayScrollEl.value, top);
-      dayScrollTop.value = top;
-      computeDayView();
-    }
+    setViewerTop(dayScrollEl.value, top, smooth);
   });
 };
 
 const scrollMonthTo = (y, smooth = false) => {
-  const pageIdx = y - MIN_YEAR;
+  const pageIdx = Math.max(0, Math.min(totalMonthPages - 1, y - MIN_YEAR));
   const top = pageIdx * MONTH_PAGE_H;
   afterScrollLayout(() => {
     if (!monthScrollEl.value) return;
@@ -742,7 +748,25 @@ const onLeave = (el, done) => {
 };
 
 onMounted(() => {
-  nextTick(() => nextTick(() => scrollDayTo(todayYear, todayMonth)));
+  // 锚定到选中日期（若有），否则定位到今天，避免日历停留在起始月（1920）
+  const target = Array.isArray(props.SelectedDates) && props.SelectedDates[0] ? props.SelectedDates[0] : new Date();
+  const tYear = target.getFullYear();
+  const tMonth = target.getMonth();
+  headerYear.value = tYear;
+  headerMonth.value = tMonth;
+  scrollDayTo(tYear, tMonth);
+  // 兜底：布局/打开动画完成后若容器尚未滚动到目标位置，强制再滚一次
+  globalThis.setTimeout(() => {
+    const meta = monthMeta.data[absMonthOf(tYear, tMonth)];
+    if (!meta || !dayScrollEl.value) return;
+    const top = meta.startRow * ROW_H;
+    const el = scrollViewerElement(dayScrollEl.value);
+    if (!el || Math.abs((el.scrollTop || 0) - top) > 2) {
+      setViewerTop(dayScrollEl.value, top, false);
+      dayScrollTop.value = top;
+      computeDayView();
+    }
+  }, 320);
 });
 
 watch([() => props.Language, () => props.CalendarIdentifier], () => {

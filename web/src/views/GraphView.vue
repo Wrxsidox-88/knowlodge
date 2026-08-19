@@ -2,10 +2,12 @@
   <div>
     <div class="card">
       <div class="toolbar">
-        <select v-model="filter.subject" style="width: 130px">
-          <option value="">全部科目</option>
-          <option v-for="s in subjects" :key="s">{{ s }}</option>
-        </select>
+        <WinComboBox
+          :ItemsSource="subjectFilterOptions"
+          DisplayMemberPath="label"
+          SelectedValuePath="value"
+          v-model:SelectedValue="filter.subject"
+          Width="150" />
         <input v-model="filter.keyword" placeholder="按知识点名称/描述筛选" style="width: 220px" @keyup.enter="reload" />
         <button class="primary small" @click="focusNode = null; reload()">查询</button>
         <button class="small" @click="reset">重置</button>
@@ -161,10 +163,12 @@
             </div>
 
             <div class="toolbar" style="margin-top: 8px">
-              <select v-model="newEdge.targetId" style="flex: 1">
-                <option value="">选择目标知识点…</option>
-                <option v-for="n in edgeTargets" :key="n.id" :value="n.id">{{ n.name }}（{{ n.subject || '未分类' }}）</option>
-              </select>
+              <WinComboBox
+                :ItemsSource="edgeTargetOptions"
+                DisplayMemberPath="label"
+                SelectedValuePath="value"
+                v-model:SelectedValue="newEdge.targetId"
+                PlaceholderText="选择目标知识点…" />
               <input v-model="newEdge.relation" placeholder="关系，如：包含" style="width: 110px" />
               <button class="small primary" :disabled="!newEdge.targetId" @click="addEdge">＋ 关系</button>
             </div>
@@ -204,6 +208,7 @@ import { api } from '../api.js';
 import { renderMarkdown } from '../util.js';
 import { chartPalette } from '../charts.js';
 import { winConfirm, winAlert, winPrompt } from '../dialogs.js';
+import WinComboBox from '../winui/components/WinComboBox.vue';
 
 echarts.use([GraphChart, TooltipComponent, LegendComponent, CanvasRenderer]);
 
@@ -211,6 +216,14 @@ const route = useRoute();
 const md = renderMarkdown;
 const graph = ref({ nodes: [], edges: [], subGraphs: [], subjects: [], nodeTotal: 0, edgeTotal: 0 });
 const subjects = computed(() => graph.value.subjects || []);
+const subjectFilterOptions = computed(() => [
+  { label: '全部科目', value: '' },
+  ...subjects.value.map((s) => ({ label: s, value: s }))
+]);
+const edgeTargetOptions = computed(() => [
+  { label: '选择目标知识点…', value: '' },
+  ...edgeTargets.value.map((n) => ({ label: `${n.name}（${n.subject || '未分类'}）`, value: n.id }))
+]);
 const filter = reactive({ subject: '', keyword: '' });
 const focusNode = ref(route.query.node ? Number(route.query.node) : null);
 const mode = ref('graph');

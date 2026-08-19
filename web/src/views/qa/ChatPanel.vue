@@ -41,10 +41,7 @@
           <div v-else class="msg-ai">
             <div class="ai-avatar">AI</div>
             <div class="ai-body">
-              <div class="md-body" v-html="md(parsedOf(m).answerText)"></div>
-              <div v-if="m._streaming" class="muted" style="font-size: 12px">
-                <span class="typing"><i></i><i></i><i></i></span> 正在流式输出…
-              </div>
+              <div class="md-body" v-html="parsedOf(m).html"></div>
 
               <FigureBlock v-for="(f, i) in parsedOf(m).figures" :key="'f' + i" :specText="f" />
               <ToolCallCard
@@ -88,7 +85,7 @@
           </div>
         </template>
 
-        <div v-if="loading && !streamingMsg" class="msg-ai">
+        <div v-if="loading" class="msg-ai">
           <div class="ai-avatar">AI</div>
           <div class="ai-body">
             <span class="typing"><i></i><i></i><i></i></span>
@@ -106,10 +103,14 @@
         </div>
         <div class="chat-input">
           <button class="glass-btn" title="引用系统数据" @click="openRefs">引用</button>
-          <select v-model="selectedModel" class="model-select" title="切换模型（自动获取自 API 的 /models）">
-            <option value="">默认模型{{ modelConfigured ? `（${modelConfigured}）` : '' }}</option>
-            <option v-for="mo in modelOptions" :key="mo" :value="mo">{{ mo }}</option>
-          </select>
+          <span class="model-select" title="切换模型（自动获取自 API 的 /models）">
+            <WinComboBox
+              :ItemsSource="modelSelectOptions"
+              DisplayMemberPath="label"
+              SelectedValuePath="value"
+              v-model:SelectedValue="selectedModel"
+              Width="190" />
+          </span>
           <textarea
             v-model="input"
             rows="1"
@@ -125,6 +126,7 @@
       </div>
     </section>
 
+    <Teleport to="body">
     <div v-if="refsModal" class="modal-mask" @click.self="refsModal = false">
       <div class="modal">
         <h3>引用系统数据（作为本次提问的上下文）</h3>
@@ -147,19 +149,21 @@
         </div>
       </div>
     </div>
-  </div>
-</template>
+    </Teleport>
+  </div></template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { api, sendMessageStream } from '../../api.js';
+import WinComboBox from '../../winui/components/WinComboBox.vue';
+import { api, sendMessage } from '../../api.js';
 import { renderMarkdown } from '../../util.js';
 import { winConfirm, winPrompt } from '../../dialogs.js';
 import FigureBlock from './FigureBlock.vue';
 import ToolCallCard from './ToolCallCard.vue';
 
 const md = renderMarkdown;
+
 const route = useRoute();
 const router = useRouter();
 
@@ -169,11 +173,14 @@ const currentId = ref(null);
 const messages = ref([]);
 const input = ref('');
 const loading = ref(false);
-const streamingMsg = ref(null);
 const scrollEl = ref(null);
 const selectedModel = ref('');
 const modelOptions = ref([]);
 const modelConfigured = ref('');
+const modelSelectOptions = computed(() => [
+  { label: `默认模型${modelConfigured.value ? `（${modelConfigured.value}）` : ''}`, value: '' },
+  ...modelOptions.value.map((m) => ({ label: m, value: m }))
+]);
 const pendingRefs = ref([]);
 const refsModal = ref(false);
 const refTab = ref('material');
@@ -196,7 +203,7 @@ const suggestions = [
   '我的物理最近有进步吗？接下来怎么复习？'
 ];
 
-function parseAssistantContent(raw, streaming = false) {
+function parseAssistantContent(raw) {
   let obj = null;
   try {
     obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -204,12 +211,7 @@ function parseAssistantContent(raw, streaming = false) {
     /* 纯文本消息 */
   }
   const hasObj = obj && typeof obj === 'object' && typeof obj.answer === 'string';
-  let answerRaw = hasObj ? obj.answer : String(raw);
-  // 流式输出中：隐藏尚未闭合的代码块（figure/tool），避免半截 JSON 闪烁
-  if (streaming) {
-    const fenceCount = (answerRaw.match(/```/g) || []).length;
-    if (fenceCount % 2 === 1) answerRaw = answerRaw.slice(0, answerRaw.lastIndexOf('```'));
-  }
+  const answerRaw = hasObj ? obj.answer : String(raw);
   const figures = [...answerRaw.matchAll(/```figure\s*([\s\S]*?)```/g)].map((m) => m[1].trim());
   const tools = [...answerRaw.matchAll(/```tool\s*([\s\S]*?)```/g)]
     .map((m) => {
@@ -233,8 +235,25 @@ function parseAssistantContent(raw, streaming = false) {
 
 function parsedOf(m) {
   if (m.role !== 'assistant') return {};
-  if (!m._parsed || m._streaming) m._parsed = parseAssistantContent(m.content, Boolean(m._streaming));
-  return m._parsed;
+  if (!m._parsed) m._parsed = parseAssistantContent(m.content);
+  const p = m._parsed;
+  // Markdown/LaTeX 渲染结果按文本缓存，避免父组件重渲染时对历史消息重复渲染
+  if (p._htmlKey !== p.answerText) {
+    p._htmlKey = p.answerText;
+    p.html = renderMdLazy(p.answerText);
+  }
+  return p;
+}
+
+const mdCache = new Map();
+function renderMdLazy(text) {
+  let html = mdCache.get(text);
+  if (html === undefined) {
+    html = md(text);
+    if (mdCache.size > 300) mdCache.clear();
+    mdCache.set(text, html);
+  }
+  return html;
 }
 
 async function loadConversations() {
@@ -301,46 +320,19 @@ async function send() {
       currentId.value = created.id;
     }
 
-    // 流式消息占位：content 为 result 结构，_streaming 标记逐字渲染
-    const msg = { _k: 'a' + ++seq, role: 'assistant', _streaming: true, content: { answer: '' } };
-    messages.value.push(msg);
-    streamingMsg.value = msg;
-    scrollBottom();
-
-    await new Promise((resolve) => {
-      sendMessageStream(convId, q, selectedModel.value || undefined, refs.length ? refs : undefined, {
-        onMeta: (meta) => {
-          msg.content = { ...msg.content, citations: meta.citations, relatedTree: meta.relatedTree, personalTip: meta.personalTip, question: meta.question };
-          scrollBottom();
-        },
-        onToken: (delta, full) => {
-          msg.content = { ...msg.content, answer: full };
-          scrollBottom();
-        },
-        onDone: (evt) => {
-          msg.content = evt.result;
-          msg.id = evt.messageId;
-          msg._streaming = false;
-          msg._parsed = null;
-          streamingMsg.value = null;
-          resolve();
-        },
-        onError: (message) => {
-          msg._streaming = false;
-          msg.content = msg.content?.answer
-            ? { answer: `${msg.content.answer}\n\n（流式中断：${message}）` }
-            : { answer: `回答失败：${message}` };
-          streamingMsg.value = null;
-          resolve();
-        }
-      });
-    });
+    // 非流式：一次请求返回完整回答，完成后一次性渲染
+    const resp = await sendMessage(
+      convId,
+      q,
+      selectedModel.value || undefined,
+      refs.length ? refs : undefined
+    );
+    messages.value.push({ _k: 'a' + ++seq, role: 'assistant', content: resp.result, id: resp.messageId });
     await loadConversations();
   } catch (e) {
     messages.value.push({ _k: 'e' + ++seq, role: 'assistant', content: `回答失败：${e.message}` });
   } finally {
     loading.value = false;
-    streamingMsg.value = null;
     scrollBottom();
   }
 }

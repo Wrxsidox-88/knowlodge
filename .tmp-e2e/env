@@ -1,0 +1,8 @@
+AI_BASE_URL=https://ai-api.zrcdev.cn/v1
+AI_API_KEY=sk-ordlhvtfqOnns2nCEVlPftuUPzgcqjc2Gub55YIkXOrMQNux
+AI_CHAT_MODEL=deepseek-v4-flash
+AI_CHAT_MODEL_BACKUP=gpt-5.4-mini
+AI_RETRY_COUNT=1
+AI_EMBED_MODEL=qwen3.7-text-embedding
+DATA_DIR=.tmp-e2e/data
+PORT=8799

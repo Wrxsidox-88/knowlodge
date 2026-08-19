@@ -136,3 +136,31 @@ export function fmtTime(s) {
   if (!s) return '-';
   return String(s).includes('T') ? new Date(s).toLocaleString() : s.replace('T', ' ');
 }
+
+/* 日期/时间字符串 ↔ 本地 Date / {hour, minute} 对象（供 WinUI 日期时间选择控件使用，避免 UTC 时区偏移） */
+export function parseLocalDate(str) {
+  if (!str) return null;
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(String(str));
+  if (!m) return null;
+  return new Date(+m[1], +m[2] - 1, +m[3]);
+}
+
+export function fmtDate(d) {
+  if (!d || isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+export function parseTimeStr(str) {
+  if (!str) return null;
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(str));
+  if (!m) return null;
+  return { hour: Math.min(23, Math.max(0, +m[1])), minute: Math.min(59, Math.max(0, +m[2])) };
+}
+
+export function fmtTimeHM(t) {
+  if (!t) return '';
+  const h = Math.min(23, Math.max(0, Number(t.hour) || 0));
+  const m = Math.min(59, Math.max(0, Number(t.minute) || 0));
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}

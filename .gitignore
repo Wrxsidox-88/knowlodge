@@ -16,6 +16,9 @@ backups/
 # 第三方库源码（winui-lib 不参与构建，前端使用 web/src/winui 内置副本）
 winui-lib/
 
+# UI 升级参考：WinUIonWeb 远程仓库离线副本（.uiupgrade/）
+.uiupgrade/
+
 # 系统
 .DS_Store
 Thumbs.db
