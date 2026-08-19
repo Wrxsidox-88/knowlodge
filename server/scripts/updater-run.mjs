@@ -123,11 +123,23 @@ async function buildWeb() {
 
 async function restartPm2(name) {
   log(`重启 PM2 进程 ${name} ...`);
-  for (const args of [['reload', name], ['restart', name]]) {
-    try { await pExec('pm2', args); log('PM2 重启成功 用 ' + args[0]); return; } catch (e) { log('pm2 ' + args[0] + ' 失败: ' + e.message); }
+  const attempts = [
+    { cmd: 'pm2', args: ['reload', name], label: 'pm2 reload' },
+    { cmd: 'pm2', args: ['restart', name], label: 'pm2 restart' },
+    { cmd: 'npx', args: ['pm2', 'reload', name], label: 'npx pm2 reload' }
+  ];
+  for (const a of attempts) {
+    try {
+      await pExec(a.cmd, a.args, { timeout: 15000 });
+      log('PM2 重启命令成功（' + a.label + '）');
+      return true;
+    } catch (e) {
+      log('PM2 重启命令未及时完成（' + a.label + '）: ' + e.message);
+    }
   }
-  try { await pExec('npx', ['pm2', 'reload', name], { timeout: 60000 }); log('npx pm2 重启成功'); }
-  catch (e) { throw new Error('PM2 重启失败: ' + e.message); }
+  // pm2 命令未返回不代表服务没重启：交由健康检测判定，避免误回滚/卡死
+  log('PM2 重启命令均未返回；服务可能已重启，交由健康检测判定（避免误回滚）');
+  return false;
 }
 
 async function healthCheck(port, timeoutSec = 180) {

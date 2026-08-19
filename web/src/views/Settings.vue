@@ -1553,6 +1553,8 @@ const updProgress = ref(null);
 let updProgressTimer = null;
 // 更新完成后自动刷新页面（服务重启恢复后 location.reload()）
 const updAutoReload = ref(false);
+// 防抖：只有进度确实进入过“运行中”之后结束，才允许自动刷新（避免应用启动瞬间误触发）
+const updSawRunning = ref(false);
 // 详细更新日志（轮询 /api/update/log）
 const updLogModal = ref(false);
 const updLogContent = ref('');
@@ -1825,11 +1827,12 @@ async function refreshUpdateProgress() {
     if (!s) return;
     updStatus.value = s;
     const p = s.progress;
+    if (p && p.running === true) updSawRunning.value = true; // 曾真正进入运行态
     if (!p || p.running === false) {
       stopUpdateProgress();
       updProgress.value = null;
-      // 更新已完成（服务重启中）：若本次是成功发起的更新，则等待服务恢复后自动刷新页面
-      if (updAutoReload.value) {
+      // 更新已完成：仅当本次成功发起且确实运行过，等待服务恢复后自动刷新页面
+      if (updAutoReload.value && updSawRunning.value) {
         updAutoReload.value = false;
         autoReloadAfterUpdate();
       }
