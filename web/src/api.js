@@ -179,6 +179,7 @@ export const api = {
   getUpdateDiff: () => http.get('/update/diff'),
   saveUpdateSettings: (values) => http.post('/update/settings', { values }),
   applyUpdate: (payload) => http.post('/update/apply', payload),
+  getUpdateReadme: () => http.get('/update/readme'),
 
   monitor: () => http.get('/monitor'),
 

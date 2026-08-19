@@ -7,7 +7,8 @@ import { logger } from '../logger.js';
 import { db, verifyPassword } from '../db.js';
 import {
   updateConfig, localVersion, localChangelog, checkUpstream, lastCheck, lastResult, readRunLog,
-  diffPlan, prepareIncremental, runUpdater, runningTasks, parseRepo, DATA_DIR
+  diffPlan, prepareIncremental, runUpdater, runningTasks, parseRepo, DATA_DIR, PROJECT_ROOT,
+  readProgress, clearProgress
 } from '../services/updater.js';
 
 export const updateRouter = Router();
@@ -47,11 +48,16 @@ updateRouter.get('/status', (req, res) => {
     lastCheck: state,
     lastResult: result,
     busy: runningTasks(),
+    progress: readProgress(),
     runLog: result?.ok || result?.reason ? readRunLog().slice(-4000) : ''
   });
 });
 
 updateRouter.post('/settings', (req, res) => {
+  // 修改更新相关设置需密码验证
+  if (!requirePassword(req.user, req.body?.password || '')) {
+    return res.status(403).json({ error: '密码验证失败，无法修改更新设置' });
+  }
   const v = req.body?.values || {};
   const updates = {};
   for (const [k, env] of Object.entries(KEY_TO_ENV)) {
@@ -81,6 +87,16 @@ updateRouter.get('/diff', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// 系统介绍（仓库 README）
+updateRouter.get('/readme', (req, res) => {
+  try {
+    const p = path.join(PROJECT_ROOT, 'README.md');
+    res.json({ ok: true, content: fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // 下载仓库 tarball 并解压，返回 full 暂存根目录
 async function prepareFull(staging) {
   const cfg = updateConfig();
@@ -101,7 +117,7 @@ function execFileAsync(cmd, args, opts) {
 
 updateRouter.post('/apply', async (req, res, next) => {
   try {
-    const { password, method, targetVersion, changelog } = req.body || {};
+    const { password, method, targetVersion, changelog, force } = req.body || {};
     const tasks = runningTasks();
     if (tasks > 0) {
       return res.status(409).json({ error: '当前有运行中的任务，请等待其结束或失败后再更新', busy: tasks });
@@ -118,12 +134,16 @@ updateRouter.post('/apply', async (req, res, next) => {
       fs.mkdirSync(staging, { recursive: true });
       stagingDir = await prepareFull(staging);
     } else {
-      if (!plan.count) return res.json({ ok: true, skipped: true, message: '没有需要更新的差异文件（已是最新）' });
+      if (!plan.count) {
+        if (force) return res.json({ ok: true, skipped: true, force: true, message: '本地已与仓库一致，无需强制更新' });
+        return res.json({ ok: true, skipped: true, message: '没有需要更新的差异文件（已是最新）' });
+      }
       const st = await prepareIncremental(plan.changedFiles, plan.branch);
       stagingDir = st.stagingDir;
     }
     const tgt = targetVersion || plan.remoteVersion;
     const chg = changelog || plan.changelog || '';
+    clearProgress();
     const started = runUpdater({ method: m, stagingDir, targetVersion: tgt, changelog: chg });
     if (!started.started) return res.status(409).json({ error: '更新启动失败', busy: started.tasks });
     res.json({ ok: true, started: true, method: m, version: tgt, pid: started.pid, stagingDir });

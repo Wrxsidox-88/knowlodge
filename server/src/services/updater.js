@@ -14,7 +14,7 @@ import { db } from '../db.js';
 //   具备 备份 -> 替换 -> 构建 -> 重启 -> 健康检测 -> 失败回滚 流程。
 // ============================================================
 
-const PROJECT_ROOT = path.resolve(ROOT_DIR, '..'); // 仓库/项目根（.release、web 在项目根）
+export const PROJECT_ROOT = path.resolve(ROOT_DIR, '..'); // 仓库/项目根（.release、web 在项目根）
 const RELEASE_DIR = path.join(PROJECT_ROOT, '.release');
 const VERSION_FILE = path.join(RELEASE_DIR, '.version');
 const VERSION_UPDATE_FILE = path.join(RELEASE_DIR, '.version.update');
@@ -243,6 +243,16 @@ export function lastResult() {
 export function readRunLog() {
   try { return fs.readFileSync(RUN_LOG, 'utf8'); }
   catch { return ''; }
+}
+
+// ---------- 更新进度（供前端轮询进度条）----------
+const PROGRESS_FILE = path.join(DATA_DIR, 'update-progress.json');
+export function readProgress() {
+  try { return JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8')); }
+  catch { return null; }
+}
+export function clearProgress() {
+  try { fs.writeFileSync(PROGRESS_FILE, JSON.stringify({ running: false, step: 'idle', percent: 0, message: '', ts: Date.now() }), 'utf8'); } catch {}
 }
 
 // ---------- 触发独立更新进程 ----------

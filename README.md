@@ -112,6 +112,7 @@ npm run dev               # http://localhost:5173
 | GET | /api/update/status | 版本与更新状态（当前版本/设置/最近检查/最近结果/运行任务） |
 | POST | /api/update/check | 手动检查更新 |
 | GET | /api/update/diff | 查看将更新的差异文件清单 |
+| GET | /api/update/readme | 系统介绍（项目 README 全文） |
 | POST | /api/update/settings | 保存版本与更新设置（仓库/代理/间隔/自动策略/方式） |
 | POST | /api/update/apply | 执行更新（需密码验证；增量或完整替换） |
 | POST | /api/auth/verify-password | 校验当前账户密码（二次确认/更新前校验） |
@@ -131,6 +132,8 @@ npm run dev               # http://localhost:5173
 - **自动更新策略**：`仅检测提醒` / `检测并下载` / `直接完成更新` 三档可选。
 
 > 提示：要让更新可被检测，需将更高版本号的 `.release/.version` 与 `.release/.version.update` 提交并 push 到仓库默认分支。
+>
+> **增强（v1.2.0）**：可查看「该版本更新日志」与「系统介绍（项目 README）」；支持**强制更新**（即使无新版本也可从仓库强制同步）；除「检查更新」外，保存更新设置 / 执行更新 / 强制更新均需**密码验证**；更新过程直至重启前以 **WinUI 进度条**实时显示进度。
 
 ## 生产环境部署
 

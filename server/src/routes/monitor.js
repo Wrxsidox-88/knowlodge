@@ -5,6 +5,7 @@ import { db } from '../db.js';
 import { logger } from '../logger.js';
 import { indexSize } from '../services/vectorStore.js';
 import { aiEnabled } from '../ai/client.js';
+import { localVersion } from '../services/updater.js';
 
 export const monitorRouter = Router();
 
@@ -29,7 +30,8 @@ monitorRouter.get('/', (req, res) => {
     aiEnabled: aiEnabled(),
     // 版本信息（设置 - 账户 - 系统信息）
     osVersion: `${os.type()} ${os.release()}${os.arch ? ` ${os.arch()}` : ''}`,
-    serverVersion,
+    // 版本号动态取自 .release/.version（系统版本文件），未配置时回退到 server/package.json
+    serverVersion: localVersion() || serverVersion,
     nodeVersion: process.version,
     counts: {
       materials: count('SELECT COUNT(*) AS c FROM materials'),

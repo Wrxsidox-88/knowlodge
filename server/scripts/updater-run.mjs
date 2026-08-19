@@ -44,8 +44,13 @@ function log(line) {
   console.log(line);
 }
 
+function writeProgress(step, percent, message, done = false) {
+  try {
+    fs.writeFileSync(path.join(DATA_DIR, 'update-progress.json'), JSON.stringify({ running: !done, step, percent, message, ts: Date.now() }, null, 2), 'utf8');
+  } catch {}
+}
 function resum(o) { try { fs.writeFileSync(RESULT_FILE, JSON.stringify(o, null, 2), 'utf8'); } catch {} }
-function fail(code, reason) { resum({ ts: Date.now(), ok: false, method: code, version: null, reason, logFile: RUN_LOG }); process.exitCode = 1; }
+function fail(code, reason) { writeProgress('failed', 0, reason, true); resum({ ts: Date.now(), ok: false, method: code, version: null, reason, logFile: RUN_LOG }); process.exitCode = 1; }
 
 const pExec = (cmd, args, opts = {}) => new Promise((resolve, reject) => {
   execFile(cmd, args, { ...opts, maxBuffer: 20 * 1024 * 1024 }, (err, so) => (err ? reject(err) : resolve(so)));
@@ -156,6 +161,7 @@ try {
   }
   if (!stagingDir || !fs.existsSync(stagingDir)) { fail(method, '暂存目录不存在: ' + stagingDir); process.exit(1); }
   log(`启动更新：method=${method} version=${targetVersion} pm2=${pm2} port=${port}`);
+  writeProgress('start', 5, '更新已启动');
 
   const ts = String(Date.now());
   const backupDir = path.join(DATA_DIR, 'update-backup', ts);
@@ -164,6 +170,7 @@ try {
   const relList = await collect(stagingDir);
   const created = await backupFiles(relList, backupDir);
   log(`已备份 ${relList.length} 项（新建 ${created.length} 项）`);
+  writeProgress('backup', 18, '已备份待更新文件');
 
   // 应用替换
   for (const rel of relList) {
@@ -171,19 +178,25 @@ try {
     await cpRec(path.join(stagingDir, rel), path.join(PROJECT_ROOT, rel));
   }
   log('替换完成');
+  writeProgress('apply', 40, '完成文件替换');
 
   // 更新本地版本文件
   fs.mkdirSync(path.dirname(VERSION_FILE), { recursive: true });
   if (targetVersion) fs.writeFileSync(VERSION_FILE, targetVersion + '\n', 'utf8');
   if (changelog) fs.writeFileSync(VERSION_UPDATE_FILE, changelog, 'utf8');
   log(`版本文件更新为 ${targetVersion}`);
+  writeProgress('version', 50, '版本文件已更新');
 
+  writeProgress('build', 55, '正在构建前端…');
   await buildWeb();
+  writeProgress('build', 78, '构建完成');
 
   let ok = false;
   try {
+    writeProgress('restart', 82, '正在重启服务…');
     await restartPm2(pm2);
     await healthCheck(port, 180);
+    writeProgress('health', 95, '健康检测通过');
     ok = true;
   } catch (e) {
     log('更新后健康检测未通过，执行回滚: ' + e.message);
@@ -194,6 +207,7 @@ try {
   }
 
   const v = (() => { try { return fs.readFileSync(VERSION_FILE, 'utf8').trim(); } catch { return targetVersion; } })();
+  writeProgress('done', 100, '更新完成', true);
   resum({ ts: Date.now(), ok, method, version: v, logFile: RUN_LOG });
   log('更新成功，当前版本 ' + v);
   process.exit(0);

@@ -267,7 +267,7 @@
       <div class="about-header">
         <div class="about-app">
           <div class="about-app-title">知识图谱智能问答系统</div>
-          <div class="about-app-sub">knowlodge · v1.0.0</div>
+          <div class="about-app-sub">knowlodge · v{{ sysInfo?.serverVersion || updLocal?.version || '-' }}</div>
           <div class="about-app-desc">以 AI 为核心的学习平台：材料输入 → 知识图谱构建 → 智能问答 → 学习闭环（考试 / 错题 / 学情 / 练习 / 报告）</div>
         </div>
       </div>
@@ -335,6 +335,11 @@
         <button class="primary" :disabled="updChecking" @click="checkUpdate">
           <span v-if="updChecking" class="loading"></span>检查更新
         </button>
+        <button @click="openUpdChangelog">查看更新日志</button>
+        <button :disabled="updReadmeBusy" @click="openUpdReadme">
+          <span v-if="updReadmeBusy" class="loading"></span>系统介绍
+        </button>
+        <button class="danger" :disabled="updApplying || updBusyCount > 0" @click="forceUpdate">强制更新</button>
       </div>
 
       <div class="card" style="margin-top: 10px">
@@ -381,8 +386,15 @@
           </button>
           <span v-if="updBusyCount > 0" class="muted" style="font-size: 12px">有任务运行中，暂不可更新</span>
         </div>
-        <div v-if="updApplySuccess" class="muted done" style="margin-top: 8px">{{ updApplySuccess }}</div>
       </div>
+
+      <!-- 实时更新进度条（触发更新后每 1.5s 轮询） -->
+      <div v-if="updProgressShown" class="node-card" style="margin-top: 10px">
+        <div class="muted" style="margin-bottom: 6px">更新进度</div>
+        <WinProgressBar :Value="updProgressPercent" :IsIndeterminate="updProgressIndeterminate" :Width="'100%'" :MinHeight="4" />
+        <div v-if="updProgressMessage" class="muted" style="font-size: 12px; margin-top: 6px">{{ updProgressMessage }}</div>
+      </div>
+      <div v-if="updApplySuccess && !updProgressShown" class="muted done" style="margin-top: 8px">{{ updApplySuccess }}</div>
 
       <h3 style="margin-top: 14px">设置</h3>
       <label class="field">
@@ -412,9 +424,7 @@
       </label>
       <div class="muted" style="font-size: 12px; margin-top: 4px">关闭自动更新（off）时仅可手动检查与应用更新。</div>
       <div class="toolbar" style="margin-top: 10px">
-        <button class="primary" :disabled="updSaving" @click="saveUpdateSettings">
-          <span v-if="updSaving" class="loading"></span>保存设置
-        </button>
+        <button class="primary" @click="saveUpdateSettings">保存设置</button>
         <span v-if="updSaved" class="muted done" style="font-size: 12px">设置已保存</span>
         <span v-if="updStatusError" class="muted danger" style="font-size: 12px">{{ updStatusError }}</span>
       </div>
@@ -715,25 +725,53 @@
     </div>
     </Teleport>
 
-    <!-- 应用更新弹窗：需验证当前账户密码 -->
+    <!-- 更新日志弹窗 -->
     <Teleport to="body">
-      <div v-if="updApplyModal" class="modal-mask" @click.self="closeApply">
-        <div class="modal" style="width: min(440px, 92vw)">
-          <h3>应用更新</h3>
-          <p class="muted" style="font-size: 13px; line-height: 1.7; margin-bottom: 12px">
-            将更新至新版本<strong v-if="updLastCheck && updLastCheck.remoteVersion"> {{ updLastCheck.remoteVersion }}</strong>（{{ updMethodConfigLabel }}）
-            。输入当前账户密码确认：
-          </p>
-          <div class="pw-row">
-            <WinPasswordBox v-model:Password="updApplyPw" :PasswordRevealMode="updApplyPwShow ? 'Visible' : 'Hidden'" PlaceholderText="输入当前账户密码" :Width="'100%'" @Enter="confirmApply" />
-            <WinCheckBox v-model:IsChecked="updApplyPwShow" Content="显示密码" />
+      <div v-if="updLogModal" class="modal-mask" @click.self="updLogModal = false">
+        <div class="modal" style="width: min(560px, 92vw)">
+          <h3>更新日志</h3>
+          <pre class="md-text" style="max-height: 60vh; overflow: auto; margin-top: 8px">{{ updLogContent }}</pre>
+          <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px">
+            <button @click="updLogModal = false">关闭</button>
           </div>
-          <div v-if="updApplyBusy" class="error-box" style="margin-top: 8px">有任务运行中，请等待完成后重试</div>
-          <div v-else-if="updApplyErr" class="error-box" style="margin-top: 8px">{{ updApplyErr }}</div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 系统介绍（README）弹窗 -->
+    <Teleport to="body">
+      <div v-if="updReadmeModal" class="modal-mask" @click.self="updReadmeModal = false">
+        <div class="modal" style="width: min(600px, 92vw)">
+          <h3 style="display: flex; align-items: center; gap: 8px">
+            系统介绍（README）
+            <div class="spacer"></div>
+            <button @click="updReadmeModal = false">关闭</button>
+          </h3>
+          <div v-if="updReadmeBusy" class="muted" style="padding: 12px 0">
+            <span class="loading"></span> 加载中…
+          </div>
+          <div v-else-if="updReadmeMsg" class="error-box" style="margin-top: 8px">{{ updReadmeMsg }}</div>
+          <pre v-else class="md-text" style="max-height: 60vh; overflow: auto; margin-top: 8px">{{ updReadmeContent }}</pre>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 更新操作弹窗（应用更新 / 强制更新 / 保存设置，通用密码确认）：需验证当前账户密码 -->
+    <Teleport to="body">
+      <div v-if="updModal" class="modal-mask" @click.self="closeApply">
+        <div class="modal" style="width: min(440px, 92vw)">
+          <h3>{{ updModalTitle }}</h3>
+          <p class="muted" style="font-size: 13px; line-height: 1.7; margin-bottom: 12px">{{ updModalDesc }}</p>
+          <div class="pw-row">
+            <WinPasswordBox v-model:Password="updPw" :PasswordRevealMode="updPwShow ? 'Visible' : 'Hidden'" PlaceholderText="输入当前账户密码" :Width="'100%'" @Enter="confirmUpdAction" />
+            <WinCheckBox v-model:IsChecked="updPwShow" Content="显示密码" />
+          </div>
+          <div v-if="updBusyTask" class="error-box" style="margin-top: 8px">有任务运行中，请等待完成后重试</div>
+          <div v-else-if="updPwErr" class="error-box" style="margin-top: 8px">{{ updPwErr }}</div>
           <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px">
             <button @click="closeApply">取消</button>
-            <button class="primary" :disabled="updApplying || updBusyCount > 0" @click="confirmApply">
-              <span v-if="updApplying" class="loading"></span>确定更新
+            <button :class="updModalOkDanger ? 'danger' : 'primary'" :disabled="updApplying || updBusyCount > 0" @click="confirmUpdAction">
+              <span v-if="updApplying" class="loading"></span>{{ updModalOkLabel }}
             </button>
           </div>
         </div>
@@ -753,6 +791,7 @@ import WinDatePicker from '../winui/components/WinDatePicker.vue';
 import WinTimePicker from '../winui/components/WinTimePicker.vue';
 import WinPasswordBox from '../winui/components/WinPasswordBox.vue';
 import WinCheckBox from '../winui/components/WinCheckBox.vue';
+import WinProgressBar from '../winui/components/WinProgressBar.vue';
 import { api } from '../api.js';
 import { parseLocalDate, fmtDate, parseTimeStr, fmtTimeHM } from '../util.js';
 import { winConfirm, winAlert } from '../dialogs.js';
@@ -1457,7 +1496,6 @@ const updStatusError = ref('');
 const updChecking = ref(false);
 const updMsg = ref('');
 const updErr = ref(false);
-const updSaving = ref(false);
 const updSaved = ref(false);
 const updLoaded = ref(false);
 const updRepo = ref('');
@@ -1469,18 +1507,62 @@ const updMethod = ref('incremental');
 const updDiff = ref(null);
 const updDiffBusy = ref(false);
 const updApplying = ref(false);
-const updApplyModal = ref(false);
-const updApplyPw = ref('');
-const updApplyPwShow = ref(false);
-const updApplyErr = ref('');
-const updApplyBusy = ref(false);
 const updApplySuccess = ref('');
+// 通用密码确认弹窗：应用更新 / 强制更新 / 保存设置
+const updModal = ref(false);
+const pendingUpdAction = ref('');
+const updPw = ref('');
+const updPwShow = ref(false);
+const updPwErr = ref('');
+const updBusyTask = ref(false);
+// 更新日志 / 系统介绍弹窗
+const updLogModal = ref(false);
+const updReadmeModal = ref(false);
+const updReadmeBusy = ref(false);
+const updReadmeContent = ref('');
+const updReadmeMsg = ref('');
+// 实时更新进度（触发更新后轮询 /update/status 的 progress）
+const updProgress = ref(null);
+let updProgressTimer = null;
 
 const updLocal = computed(() => updStatus.value?.local || {});
 const updLastCheck = computed(() => updStatus.value?.lastCheck || null);
 const updLastResult = computed(() => updStatus.value?.lastResult || null);
 const updBusyCount = computed(() => updStatus.value?.busy || 0);
 const updHasUpdate = computed(() => !!updLastCheck.value?.hasUpdate);
+
+// 通用密码弹窗的标题 / 描述 / 按钮文案与危险样式（强制更新为 danger）
+const updModalTitle = computed(() => ({
+  apply: '应用更新',
+  force: '强制更新',
+  save: '保存设置'
+}[pendingUpdAction.value] || '更新操作'));
+const updModalDesc = computed(() => {
+  if (pendingUpdAction.value === 'apply') {
+    return `将更新至新版本${updLastCheck.value?.remoteVersion ? ' ' + updLastCheck.value.remoteVersion : ''}（${updMethodConfigLabel.value}）。输入当前账户密码确认：`;
+  }
+  if (pendingUpdAction.value === 'force') {
+    return '强制更新将跳过版本一致性检查并重新拉取最新代码。输入当前账户密码确认：';
+  }
+  if (pendingUpdAction.value === 'save') {
+    return '保存仓库地址、代理、更新间隔与自动更新策略。输入当前账户密码确认：';
+  }
+  return '';
+});
+const updModalOkLabel = computed(() => ({
+  apply: '确定更新',
+  force: '确定强制更新',
+  save: '确定保存'
+}[pendingUpdAction.value] || '确定'));
+const updModalOkDanger = computed(() => pendingUpdAction.value === 'force');
+
+const updLogContent = computed(() => updLocal.value.changelog || updLastCheck.value?.changelog || '（暂无更新日志）');
+
+// 实时更新进度
+const updProgressShown = computed(() => !!updProgress.value && updProgress.value.running !== false);
+const updProgressPercent = computed(() => Math.min(100, Math.max(0, Number(updProgress.value?.percent) || 0)));
+const updProgressIndeterminate = computed(() => updProgressShown.value && updProgress.value.percent == null);
+const updProgressMessage = computed(() => updProgress.value?.message || (updProgress.value?.step ? `正在${updProgress.value.step}` : ''));
 
 const updMethodOptions = [
   { value: 'incremental', label: '增量对比' },
@@ -1567,75 +1649,167 @@ async function viewDiff() {
   }
 }
 
-async function saveUpdateSettings() {
-  updSaving.value = true;
-  updSaved.value = false;
-  updErr.value = false;
-  updMsg.value = '';
-  try {
-    const r = await api.saveUpdateSettings({
-      repo: updRepo.value.trim(),
-      proxy: updUseProxy.value ? updProxyUrl.value.trim() : '',
-      intervalHours: Number(updInterval.value) || 0,
-      autoMode: updAutoMode.value,
-      method: updMethod.value
-    });
-    if (r && r.error) throw new Error(r.error);
-    updSaved.value = true;
-    await refreshUpdateStatus();
-  } catch (e) {
-    updErr.value = true;
-    updMsg.value = (e.response?.data?.error) || e.message || '保存设置失败';
-  } finally {
-    updSaving.value = false;
-  }
+// 保存设置：现在需先弹密码框验证，验证通过后写回（POST /api/update/settings 需 password）
+function saveUpdateSettings() {
+  openUpdAction('save');
 }
 
 function openApply() {
-  updApplyPw.value = '';
-  updApplyPwShow.value = false;
-  updApplyErr.value = '';
-  updApplyBusy.value = false;
+  openUpdAction('apply');
+}
+
+function forceUpdate() {
+  openUpdAction('force');
+}
+
+function openUpdAction(action) {
+  updPw.value = '';
+  updPwShow.value = false;
+  updPwErr.value = '';
+  updBusyTask.value = false;
   updApplySuccess.value = '';
-  updApplyModal.value = true;
+  pendingUpdAction.value = action;
+  updModal.value = true;
 }
 
 function closeApply() {
   if (updApplying.value) return;
-  updApplyModal.value = false;
+  updModal.value = false;
 }
 
-async function confirmApply() {
-  if (!updApplyPw.value) {
-    updApplyErr.value = '请输入密码';
+async function confirmUpdAction() {
+  if (!updPw.value) {
+    updPwErr.value = '请输入密码';
     return;
   }
   updApplying.value = true;
-  updApplyErr.value = '';
-  updApplyBusy.value = false;
+  updPwErr.value = '';
+  updBusyTask.value = false;
+  let failed = false;
   try {
-    const payload = { password: updApplyPw.value, method: updMethod.value };
-    const lc = updLastCheck.value;
-    if (lc?.remoteVersion) payload.targetVersion = lc.remoteVersion;
-    if (lc?.changelog) payload.changelog = lc.changelog;
-    const r = await api.applyUpdate(payload);
-    updApplySuccess.value = `更新已开始${r?.method ? `（${r.method}` : ''}${r?.version ? ` ${r.version}` : ''}${r?.method ? '）' : ''}，可在后台日志查看进度。`;
-    updApplyPw.value = '';
-    updApplyModal.value = false;
-    await refreshUpdateStatus();
+    const action = pendingUpdAction.value;
+    if (action === 'apply') await applyUpdateRun(updPw.value, false);
+    else if (action === 'force') await applyUpdateRun(updPw.value, true);
+    else if (action === 'save') await saveUpdateSettingsRun(updPw.value);
   } catch (e) {
+    failed = true;
     const msg = (e.response?.data?.error) || e.message || '';
-    if (/运行中|正在运行/.test(msg)) {
-      updApplyBusy.value = true;
-      updApplyErr.value = '';
-      await refreshUpdateStatus();
-    } else if (/密码/.test(msg)) {
-      updApplyErr.value = msg || '密码验证失败';
+    const action = pendingUpdAction.value;
+    if (action === 'apply' || action === 'force') {
+      if (/运行中|正在运行/.test(msg)) {
+        updBusyTask.value = true;
+        updPwErr.value = '';
+        await refreshUpdateStatus();
+      } else if (/密码/.test(msg)) {
+        updPwErr.value = msg || '密码验证失败';
+      } else {
+        updPwErr.value = msg || '应用更新失败';
+      }
     } else {
-      updApplyErr.value = msg || '应用更新失败';
+      // save
+      if (/密码/.test(msg)) {
+        updPwErr.value = msg || '密码验证失败';
+      } else {
+        updErr.value = true;
+        updMsg.value = msg || '保存设置失败';
+      }
     }
   } finally {
     updApplying.value = false;
+  }
+  if (!failed && !updPwErr.value) {
+    updPw.value = '';
+    updModal.value = false;
+  }
+}
+
+async function applyUpdateRun(pw, force) {
+  const payload = { password: pw, method: updMethod.value };
+  const lc = updLastCheck.value;
+  if (lc?.remoteVersion) payload.targetVersion = lc.remoteVersion;
+  if (lc?.changelog) payload.changelog = lc.changelog;
+  if (force) payload.force = true;
+  const r = await api.applyUpdate(payload);
+  if (r?.skipped) {
+    updApplySuccess.value = r.message || '已跳过：本地已与仓库一致';
+    stopUpdateProgress();
+    await refreshUpdateStatus();
+    return;
+  }
+  updApplySuccess.value = force
+    ? (r?.message || '强制更新已开始，正在拉取最新代码…')
+    : `更新已开始${r?.method ? `（${r.method}` : ''}${r?.version ? ` ${r.version}` : ''}${r?.method ? '）' : ''}，可在后台日志查看进度。`;
+  startUpdateProgress();
+  await refreshUpdateStatus();
+}
+
+async function saveUpdateSettingsRun(pw) {
+  updSaved.value = false;
+  updErr.value = false;
+  updMsg.value = '';
+  const r = await api.saveUpdateSettings({
+    repo: updRepo.value.trim(),
+    proxy: updUseProxy.value ? updProxyUrl.value.trim() : '',
+    intervalHours: Number(updInterval.value) || 0,
+    autoMode: updAutoMode.value,
+    method: updMethod.value,
+    password: pw
+  });
+  if (r && r.error) throw new Error(r.error);
+  updSaved.value = true;
+  await refreshUpdateStatus();
+}
+
+// ---- 实时更新进度：轮询 /update/status 的 progress ----
+function startUpdateProgress() {
+  stopUpdateProgress();
+  refreshUpdateProgress();
+  updProgressTimer = setInterval(refreshUpdateProgress, 1500);
+}
+
+async function refreshUpdateProgress() {
+  try {
+    const s = await api.getUpdateStatus();
+    if (!s) return;
+    updStatus.value = s;
+    const p = s.progress;
+    if (!p || p.running === false) {
+      stopUpdateProgress();
+      updProgress.value = null;
+    } else {
+      updProgress.value = p;
+    }
+  } catch {
+    /* 忽略瞬时失败，等待下一轮轮询 */
+  }
+}
+
+function stopUpdateProgress() {
+  if (updProgressTimer) {
+    clearInterval(updProgressTimer);
+    updProgressTimer = null;
+  }
+}
+
+// ---- 更新日志 / 系统介绍弹窗 ----
+function openUpdChangelog() {
+  updLogModal.value = true;
+}
+
+async function openUpdReadme() {
+  updReadmeModal.value = true;
+  updReadmeMsg.value = '';
+  updReadmeContent.value = '';
+  if (updReadmeBusy.value) return;
+  updReadmeBusy.value = true;
+  try {
+    const r = await api.getUpdateReadme();
+    updReadmeContent.value = (r && r.content) || '';
+    if (!updReadmeContent.value) updReadmeMsg.value = '暂无可用的系统介绍。';
+  } catch (e) {
+    updReadmeMsg.value = (e.response?.data?.error) || e.message || '加载系统介绍失败';
+  } finally {
+    updReadmeBusy.value = false;
   }
 }
 
@@ -1653,5 +1827,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearInterval(logTimer);
+  stopUpdateProgress();
 });
 </script>
