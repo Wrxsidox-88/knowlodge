@@ -585,7 +585,7 @@
     </div>
 
     <!-- 开发者选项（开发者模式开启后显示） -->
-    <WinExpander id="dev-options" v-if="devEnabled" class="settings-expander" Header="开发者选项" HeaderIcon="&#xE71D;">
+    <WinExpander id="dev-options" v-if="devEnabled" class="settings-expander" Header="开发者选项" HeaderIcon="&#xE71D;" :IsExpanded="devExpandOpen">
       <div class="dev-actions">
         <div class="dev-row">
           <div>
@@ -635,7 +635,7 @@
     </div>
 
     <!-- 开发者模式已开启提示（已开启时连点触发，不再进入开启流程） -->
-    <div v-if="devAlreadyModal" class="modal-mask" @click.self="devAlreadyModal = false">
+    <div v-if="devAlreadyModal" class="modal-mask">
       <div class="modal" style="width: min(400px, 92vw)">
         <h3>开发者模式已开启</h3>
         <p class="muted" style="font-size: 13px; line-height: 1.7; margin-bottom: 4px">
@@ -921,6 +921,8 @@ async function savePassword() {
 
 // ---- 开发者模式 ----
 const devEnabled = ref(false);
+const devStatusLoaded = ref(false);
+const devExpandOpen = ref(true);
 const sysFlash = ref('');
 const sysClicks = ref([]);
 const devModal = ref(false);
@@ -947,6 +949,14 @@ async function loadDev() {
     devEnabled.value = !!d.enabled;
   } catch {
     devEnabled.value = false;
+  } finally {
+    devStatusLoaded.value = true;
+    devExpandOpen.value = true;
+    if (devEnabled.value) {
+      nextTick(() => {
+        document.getElementById('dev-options')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    }
   }
 }
 
@@ -966,8 +976,12 @@ function onSysRow(key) {
     sysClicks.value.push(now);
     if (sysClicks.value.length >= 5) {
       sysClicks.value = [];
-      if (devEnabled.value) {
+      if (devEnabled.value || devStatusLoaded) {
+        devEnabled.value = true; // 即使 status 未及时同步也强制显示开发者选项
         devAlreadyModal.value = true; // 已开启：弹窗提示，不再进入开启流程
+        nextTick(() => {
+          document.getElementById('dev-options')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
       } else {
         devModal.value = true;
       }
