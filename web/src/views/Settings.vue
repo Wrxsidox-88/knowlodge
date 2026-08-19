@@ -359,7 +359,7 @@
 
       <div v-if="updHasUpdate" class="node-card" style="margin-top: 10px">
         <div class="muted" style="margin-bottom: 4px">更新日志</div>
-        <pre class="md-text" style="max-height: 180px; overflow: auto">{{ updLastCheck.changelog || '（无更新日志）' }}</pre>
+        <div class="md-body" style="max-height: 180px; overflow: auto" v-html="md(updLastCheck.changelog || '（无更新日志）')"></div>
         <div class="toolbar" style="margin-top: 8px">
           <button class="small" :disabled="updDiffBusy" @click="viewDiff">
             <span v-if="updDiffBusy" class="loading"></span>查看将更新的文件
@@ -730,7 +730,7 @@
       <div v-if="updLogModal" class="modal-mask" @click.self="updLogModal = false">
         <div class="modal" style="width: min(560px, 92vw)">
           <h3>更新日志</h3>
-          <pre class="md-text" style="max-height: 60vh; overflow: auto; margin-top: 8px">{{ updLogContent }}</pre>
+          <div class="md-body" style="max-height: 60vh; overflow: auto; margin-top: 8px" v-html="md(updLogContent)"></div>
           <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px">
             <button @click="updLogModal = false">关闭</button>
           </div>
@@ -751,7 +751,7 @@
             <span class="loading"></span> 加载中…
           </div>
           <div v-else-if="updReadmeMsg" class="error-box" style="margin-top: 8px">{{ updReadmeMsg }}</div>
-          <pre v-else class="md-text" style="max-height: 60vh; overflow: auto; margin-top: 8px">{{ updReadmeContent }}</pre>
+          <div v-else class="md-body" style="max-height: 60vh; overflow: auto; margin-top: 8px" v-html="md(updReadmeContent)"></div>
         </div>
       </div>
     </Teleport>
@@ -793,7 +793,8 @@ import WinPasswordBox from '../winui/components/WinPasswordBox.vue';
 import WinCheckBox from '../winui/components/WinCheckBox.vue';
 import WinProgressBar from '../winui/components/WinProgressBar.vue';
 import { api } from '../api.js';
-import { parseLocalDate, fmtDate, parseTimeStr, fmtTimeHM } from '../util.js';
+import { parseLocalDate, fmtDate, parseTimeStr, fmtTimeHM, renderMarkdown } from '../util.js';
+const md = renderMarkdown;
 import { winConfirm, winAlert } from '../dialogs.js';
 
 // ---- 账户信息（顶部，Windows 11 设置 > 账户 风格）----
