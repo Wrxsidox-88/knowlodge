@@ -131,7 +131,7 @@ async function restartPm2(name) {
   ];
   for (const a of attempts) {
     try {
-      await pExec(a.cmd, a.args, { timeout: 15000 });
+      await pExec(a.cmd, a.args, { timeout: 8000 });
       log('PM2 重启命令成功（' + a.label + '）');
       return true;
     } catch (e) {

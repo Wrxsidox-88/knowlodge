@@ -224,6 +224,46 @@ export async function prepareIncremental(plan, branch) {
   return { stagingDir: staging, downloaded: done };
 }
 
+// ---------- 完整包预取（统一使用完整更新：下载 codeload tarball 并解压到暂存）----------
+export async function prepareFullStaging() {
+  const cfg = updateConfig();
+  const { owner, repo } = parseRepo(cfg.repo);
+  const branch = cfg.branch || 'HEAD';
+  const ts = Date.now();
+  const staging = path.join(DATA_DIR, 'update-staging', String(ts));
+  fs.mkdirSync(staging, { recursive: true });
+  const url = `https://codeload.github.com/${owner}/${repo}/tar.gz/${branch}`;
+  const tgz = path.join(staging, 'repo.tgz');
+  const curlExec = (args, timeout) => new Promise((res, rej) => execFile('curl', args, { timeout }, (e) => (e ? rej(e) : res())));
+  writeProgress('download', 3, '正在获取完整包大小…');
+  let total = 0;
+  try {
+    const hd = await new Promise((res, rej) => execFile('curl', ['-fsSL', '-I', '-L', url].concat(cfg.proxy ? ['--proxy', cfg.proxy] : []), { timeout: 15000 }, (e, so) => (e ? rej(e) : res(so))));
+    const m = /content-length:\s*(\d+)/i.exec(hd);
+    if (m) total = Number(m[1]);
+  } catch { /* 大小未知 → indeterm 进度 */ }
+  await new Promise((resolve, reject) => {
+    const child = execFile('curl', ['-fsSL', '-L', url, '-o', tgz].concat(cfg.proxy ? ['--proxy', cfg.proxy] : []), { timeout: 180000 });
+    let last = 0;
+    const iv = setInterval(() => {
+      let done = 0;
+      try { done = fs.statSync(tgz).size; } catch {}
+      const speed = (done - last) / 0.5;
+      last = done;
+      const pct = total > 0 ? Math.min(99, Math.round(3 + 37 * (done / total))) : null;
+      const mb = (done / 1048576).toFixed(1);
+      const sp = speed > 0 ? (speed / 1048576).toFixed(2) : '0';
+      writeProgress('download', pct, `正在下载完整包 ${total > 0 ? mb + ' MB / ' + (total / 1048576).toFixed(1) + ' MB' : mb + ' MB'}（${sp} MB/s）`);
+    }, 500);
+    child.on('close', (code) => { clearInterval(iv); code === 0 ? resolve() : reject(new Error('下载失败 curl=' + code)); });
+  });
+  writeProgress('unpack', 40, '正在解压完整包…');
+  await new Promise((res, rej) => execFile('tar', ['-xzf', tgz, '-C', staging], { maxBuffer: 20 * 1024 * 1024 }, (e) => (e ? rej(e) : res())));
+  const entries = fs.readdirSync(staging).filter((n) => n !== 'repo.tgz');
+  writeProgress('unpack', 45, '解压完成');
+  return path.join(staging, entries[0]);
+}
+
 // ---------- 运行中任务检测 ----------
 const BUSY_TABLES = [
   () => { try { return db.prepare("SELECT COUNT(*) c FROM analysis_jobs WHERE status IN ('running','pending')").get().c || 0; } catch { return 0; } }
@@ -288,16 +328,20 @@ export function startUpdateScheduler() {
       const state = await checkUpstream();
       if (!state.ok || !state.hasUpdate) return;
       if (cfg.autoMode === 'notify') return; // 仅更新 state，前端提醒
-      const plan = await diffPlan();
       if (cfg.autoMode === 'download') {
-        await prepareIncremental(plan.changedFiles, plan.branch);
-        logger.info(`[update] 自动下载完成，待确认应用 (${plan.count} 个文件)`);
+        // 完整更新：下载并解压到暂存，不应用（待手动确认）
+        await prepareFullStaging();
+        logger.info('[update] 自动下载完成（完整包），待确认应用');
         return;
       }
-      // auto = 直接完成更新；等待运行任务结束
+      // auto = 直接完成更新（统一完整包替换）；等待运行任务结束
       await waitIdle();
-      const staging = (await prepareIncremental(plan.changedFiles, plan.branch)).stagingDir;
-      const res = runUpdater({ method: cfg.method, stagingDir: staging, targetVersion: plan.remoteVersion, changelog: plan.changelog });
+      const stagingDir = await prepareFullStaging();
+      const fv = path.join(stagingDir, '.release', '.version');
+      const fc = path.join(stagingDir, '.release', '.version.update');
+      let tgt = null; try { tgt = fs.readFileSync(fv, 'utf8').trim(); } catch {}
+      let chg = ''; try { chg = fs.readFileSync(fc, 'utf8'); } catch {}
+      const res = runUpdater({ method: 'full', stagingDir, targetVersion: tgt, changelog: chg });
       logger.info('[update] 自动更新已触发', res);
     } catch (e) {
       logger.error(`[update] 自动检测失败: ${e.message}`);

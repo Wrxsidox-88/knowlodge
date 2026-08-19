@@ -361,26 +361,6 @@
         <div class="muted" style="margin-bottom: 4px">更新日志</div>
         <div class="md-body" style="max-height: 180px; overflow: auto" v-html="md(updLastCheck.changelog || '（无更新日志）')"></div>
         <div class="toolbar" style="margin-top: 8px">
-          <button class="small" :disabled="updDiffBusy" @click="viewDiff">
-            <span v-if="updDiffBusy" class="loading"></span>查看将更新的文件
-          </button>
-        </div>
-        <div v-if="updDiff" class="muted" style="font-size: 12px; margin-top: 6px">
-          将更新 <b>{{ updDiff.count }}</b> 个文件（分支 {{ updDiff.branch }}）到 {{ updDiff.remoteVersion }}：
-        </div>
-        <div v-if="updDiff" class="upd-diff-list">
-          <div v-for="f in updDiff.changedFiles" :key="f.path" class="upd-diff-item">
-            <span class="badge" :class="f.action === 'create' ? 'done' : 'pending'">{{ f.action === 'create' ? '新增' : '修改' }}</span>
-            <span class="upd-diff-path">{{ f.path }}</span>
-          </div>
-        </div>
-        <label class="field" style="margin-top: 10px">
-          <span>更新方式</span>
-          <WinRadioButtons :SelectedIndex="updMethodIndex" MaxColumns="2" @SelectionChanged="onUpdMethodChanged">
-            <WinRadioButton v-for="m in updMethodOptions" :key="m.value" :Content="m.label" />
-          </WinRadioButtons>
-        </label>
-        <div class="toolbar" style="margin-top: 8px">
           <button class="primary" :disabled="updApplying || updBusyCount > 0" @click="openApply">
             <span v-if="updApplying" class="loading"></span>应用更新
           </button>
@@ -1530,9 +1510,7 @@ const updProxyUrl = ref('');
 const updUseProxy = ref(false);
 const updInterval = ref(24);
 const updAutoMode = ref('notify');
-const updMethod = ref('incremental');
-const updDiff = ref(null);
-const updDiffBusy = ref(false);
+const updMethod = ref('full');
 const updApplying = ref(false);
 const updApplySuccess = ref('');
 // 通用密码确认弹窗：应用更新 / 强制更新 / 保存设置
@@ -1555,6 +1533,8 @@ let updProgressTimer = null;
 const updAutoReload = ref(false);
 // 防抖：只有进度确实进入过“运行中”之后结束，才允许自动刷新（避免应用启动瞬间误触发）
 const updSawRunning = ref(false);
+// 已触发自动刷新（保证只刷新一次）
+const updReloadFired = ref(false);
 // 详细更新日志（轮询 /api/update/log）
 const updLogModal = ref(false);
 const updLogContent = ref('');
@@ -1608,32 +1588,17 @@ watch(updLogContent, () => {
   }
 });
 
-const updMethodOptions = [
-  { value: 'incremental', label: '增量对比' },
-  { value: 'full', label: '完整替换' }
-];
 const updAutoOptions = [
   { value: 'notify', label: '仅检测提醒' },
   { value: 'download', label: '检测并下载' },
   { value: 'auto', label: '直接完成更新' }
 ];
-const updMethodIndex = computed(() => {
-  const i = updMethodOptions.findIndex((o) => o.value === updMethod.value);
-  return i < 0 ? 0 : i;
-});
 const updAutoIndex = computed(() => {
   const i = updAutoOptions.findIndex((o) => o.value === updAutoMode.value);
   return i < 0 ? 0 : i;
 });
-const updMethodConfigLabel = computed(() => {
-  const o = updMethodOptions.find((item) => item.value === updMethod.value);
-  return o ? o.label : updMethod.value;
-});
+const updMethodConfigLabel = computed(() => updMethod.value || 'full');
 
-function onUpdMethodChanged({ SelectedIndex }) {
-  const o = updMethodOptions[SelectedIndex];
-  if (o) updMethod.value = o.value;
-}
 function onUpdAutoChanged({ SelectedIndex }) {
   const o = updAutoOptions[SelectedIndex];
   if (o) updAutoMode.value = o.value;
@@ -1651,7 +1616,6 @@ async function refreshUpdateStatus() {
         updUseProxy.value = !!c.proxy;
         updInterval.value = c.intervalHours ?? 24;
         updAutoMode.value = c.autoMode || 'notify';
-        updMethod.value = c.method || 'incremental';
         updLoaded.value = true;
       }
       updProxyUrl.value = c.proxy || '';
@@ -1666,7 +1630,6 @@ async function checkUpdate() {
   updChecking.value = true;
   updMsg.value = '';
   updErr.value = false;
-  updDiff.value = null;
   try {
     await api.checkUpdate();
     await refreshUpdateStatus();
@@ -1675,21 +1638,6 @@ async function checkUpdate() {
     updMsg.value = (e.response?.data?.error) || e.message || '检查更新失败';
   } finally {
     updChecking.value = false;
-  }
-}
-
-async function viewDiff() {
-  if (updDiffBusy.value) return;
-  updDiffBusy.value = true;
-  updMsg.value = '';
-  updErr.value = false;
-  try {
-    updDiff.value = await api.getUpdateDiff();
-  } catch (e) {
-    updErr.value = true;
-    updMsg.value = (e.response?.data?.error) || e.message || '获取更新文件失败';
-  } finally {
-    updDiffBusy.value = false;
   }
 }
 
@@ -1768,7 +1716,7 @@ async function confirmUpdAction() {
 }
 
 async function applyUpdateRun(pw, force) {
-  const payload = { password: pw, method: updMethod.value };
+  const payload = { password: pw };
   const lc = updLastCheck.value;
   if (lc?.remoteVersion) payload.targetVersion = lc.remoteVersion;
   if (lc?.changelog) payload.changelog = lc.changelog;
@@ -1791,6 +1739,7 @@ async function applyUpdateRun(pw, force) {
     return;
   }
   updAutoReload.value = true;
+  updReloadFired.value = false;
   updApplySuccess.value = force
     ? (r?.message || '强制更新已开始，正在拉取最新代码…')
     : `更新已开始${r?.method ? `（${r.method}` : ''}${r?.version ? ` ${r.version}` : ''}${r?.method ? '）' : ''}，可在后台日志查看进度。`;
@@ -1806,7 +1755,6 @@ async function saveUpdateSettingsRun(pw) {
     proxy: updUseProxy.value ? updProxyUrl.value.trim() : '',
     intervalHours: Number(updInterval.value) || 0,
     autoMode: updAutoMode.value,
-    method: updMethod.value,
     password: pw
   });
   if (r && r.error) throw new Error(r.error);
@@ -1828,13 +1776,20 @@ async function refreshUpdateProgress() {
     updStatus.value = s;
     const p = s.progress;
     if (p && p.running === true) updSawRunning.value = true; // 曾真正进入运行态
+    // 重启/健康阶段：检测到“正在重启 PM2”即开始等待服务恢复后刷新（不必等更新进程结束；
+    // 即使 PM2 挂起或健康检测未跑完，只要 /health 恢复就刷新页面）
+    if (p && p.running === true && (p.step === 'restart' || p.step === 'health')
+        && updAutoReload.value && updSawRunning.value && !updReloadFired.value) {
+      updReloadFired.value = true;
+      autoReloadAfterUpdate();
+    }
     // 关键修复：空闲(null/初始 idle)时绝不停止轮询——
     // 否则更新刚发起那一瞬读到 null 就会停掉定时器，下载阶段进度条永不出现且不再更新
     if (p && p.running === false && updSawRunning.value) {
       // 更新确实运行过且已结束 → 停止轮询；若本次成功发起则等待服务恢复后自动刷新
       stopUpdateProgress();
       updProgress.value = null;
-      if (updAutoReload.value) { updAutoReload.value = false; autoReloadAfterUpdate(); }
+      if (updAutoReload.value && !updReloadFired.value) { updReloadFired.value = true; autoReloadAfterUpdate(); }
       return;
     }
     updProgress.value = (p && p.running === true) ? p : null;
