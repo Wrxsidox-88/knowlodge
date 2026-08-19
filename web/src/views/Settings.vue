@@ -1543,7 +1543,7 @@ const updModalDesc = computed(() => {
     return `将更新至新版本${updLastCheck.value?.remoteVersion ? ' ' + updLastCheck.value.remoteVersion : ''}（${updMethodConfigLabel.value}）。输入当前账户密码确认：`;
   }
   if (pendingUpdAction.value === 'force') {
-    return '强制更新将跳过版本一致性检查并重新拉取最新代码。输入当前账户密码确认：';
+    return '强制更新将不做任何检查，直接从仓库拉取完整包覆盖本地代码（无论仓库是否一致）。确认后输入当前账户密码：';
   }
   if (pendingUpdAction.value === 'save') {
     return '保存仓库地址、代理、更新间隔与自动更新策略。输入当前账户密码确认：';

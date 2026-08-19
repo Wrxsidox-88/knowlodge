@@ -126,23 +126,27 @@ updateRouter.post('/apply', async (req, res, next) => {
     if (!requirePassword(req.user, password)) {
       return res.status(403).json({ error: '密码验证失败，无法执行更新' });
     }
-    const m = method === 'full' ? 'full' : 'incremental';
-    const plan = await diffPlan();
+    // 强制更新：不做任何一致性/差异检查，直接以完整包替换覆盖本地（无论仓库是否一致）
+    const m = (method === 'full' || force) ? 'full' : 'incremental';
+    let tgt = targetVersion || null;
+    let chg = changelog || '';
     let stagingDir;
     if (m === 'full') {
       const staging = path.join(DATA_DIR, 'update-staging', 'full-' + Date.now());
       fs.mkdirSync(staging, { recursive: true });
       stagingDir = await prepareFull(staging);
+      const fv = path.join(stagingDir, '.release', '.version');
+      const fc = path.join(stagingDir, '.release', '.version.update');
+      if (!tgt && fs.existsSync(fv)) tgt = fs.readFileSync(fv, 'utf8').trim();
+      if (!chg && fs.existsSync(fc)) chg = fs.readFileSync(fc, 'utf8');
     } else {
-      if (!plan.count) {
-        if (force) return res.json({ ok: true, skipped: true, force: true, message: '本地已与仓库一致，无需强制更新' });
-        return res.json({ ok: true, skipped: true, message: '没有需要更新的差异文件（已是最新）' });
-      }
+      const plan = await diffPlan();
+      if (!plan.count) return res.json({ ok: true, skipped: true, message: '没有需要更新的差异文件（已是最新）' });
       const st = await prepareIncremental(plan.changedFiles, plan.branch);
       stagingDir = st.stagingDir;
+      tgt = tgt || plan.remoteVersion;
+      chg = chg || plan.changelog || '';
     }
-    const tgt = targetVersion || plan.remoteVersion;
-    const chg = changelog || plan.changelog || '';
     clearProgress();
     const started = runUpdater({ method: m, stagingDir, targetVersion: tgt, changelog: chg });
     if (!started.started) return res.status(409).json({ error: '更新启动失败', busy: started.tasks });
