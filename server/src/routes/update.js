@@ -104,6 +104,11 @@ updateRouter.get('/readme', (req, res) => {
   }
 });
 
+// 详细更新日志（含命令输出，仅与更新有关）
+updateRouter.get('/log', (req, res) => {
+  res.json({ ok: true, content: readRunLog() });
+});
+
 // 下载仓库 tarball 并解压，返回 full 暂存根目录（下载过程实时写进度：已下载/总量/速度）
 async function prepareFull(staging) {
   const cfg = updateConfig();

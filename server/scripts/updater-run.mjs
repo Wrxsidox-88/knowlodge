@@ -53,7 +53,13 @@ function resum(o) { try { fs.writeFileSync(RESULT_FILE, JSON.stringify(o, null, 
 function fail(code, reason) { writeProgress('failed', 0, reason, true); resum({ ts: Date.now(), ok: false, method: code, version: null, reason, logFile: RUN_LOG }); process.exitCode = 1; }
 
 const pExec = (cmd, args, opts = {}) => new Promise((resolve, reject) => {
-  execFile(cmd, args, { ...opts, maxBuffer: 20 * 1024 * 1024 }, (err, so) => (err ? reject(err) : resolve(so)));
+  execFile(cmd, args, { ...opts, maxBuffer: 20 * 1024 * 1024 }, (err, so, se) => {
+    if (opts.logOutput !== false) {
+      try { String(so || '').split('\n').forEach((l) => { if (l.trim()) log(l); }); } catch { /* ignore */ }
+      try { String(se || '').split('\n').forEach((l) => { if (l.trim()) log('[stderr] ' + l); }); } catch { /* ignore */ }
+    }
+    err ? reject(err) : resolve(so);
+  });
 });
 
 async function cpRec(src, dst) {
@@ -154,7 +160,7 @@ catch (e) { fail('cmd', '无法读取更新指令: ' + e.message); process.exit(
 
 const { method, stagingDir, targetVersion, changelog } = cmd;
 const pm2 = process.env.UPDATE_PM2_NAME || 'knowlodge';
-const port = getEnv('PORT', '8787');
+const port = Number(process.env.PORT) || getEnv('PORT', '8787');
 
 try {
   if (DRY) {

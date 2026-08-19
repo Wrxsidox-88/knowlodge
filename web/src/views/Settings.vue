@@ -390,7 +390,11 @@
 
       <!-- 实时更新进度条（触发更新后每 1.5s 轮询） -->
       <div v-if="updProgressShown" class="node-card" style="margin-top: 10px">
-        <div class="muted" style="margin-bottom: 6px">更新进度</div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px">
+          <div class="muted">更新进度</div>
+          <div class="spacer"></div>
+          <button @click="openUpdateLog">更新日志</button>
+        </div>
         <WinProgressBar :Value="updProgressPercent" :IsIndeterminate="updProgressIndeterminate" :Width="'100%'" :MinHeight="4" />
         <div v-if="updProgressMessage" class="muted" style="font-size: 12px; margin-top: 6px">{{ updProgressMessage }}</div>
       </div>
@@ -727,13 +731,35 @@
 
     <!-- 更新日志弹窗 -->
     <Teleport to="body">
-      <div v-if="updLogModal" class="modal-mask" @click.self="updLogModal = false">
+      <div v-if="updChangelogModal" class="modal-mask" @click.self="updChangelogModal = false">
         <div class="modal" style="width: min(560px, 92vw)">
           <h3>更新日志</h3>
-          <div class="md-body" style="max-height: 60vh; overflow: auto; margin-top: 8px" v-html="md(updLogContent)"></div>
+          <div class="md-body" style="max-height: 60vh; overflow: auto; margin-top: 8px" v-html="md(updChangelogContent)"></div>
           <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px">
-            <button @click="updLogModal = false">关闭</button>
+            <button @click="updChangelogModal = false">关闭</button>
           </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 详细更新日志弹窗（轮询 /api/update/log：后台构建/重启命令输出） -->
+    <Teleport to="body">
+      <div v-if="updLogModal" class="modal-mask" @click.self="closeUpdateLog">
+        <div class="modal" style="width: min(760px, 94vw)">
+          <h3 style="display: flex; align-items: center; gap: 8px">
+            更新日志
+            <div class="spacer"></div>
+            <button :disabled="updLogBusy" @click="refreshUpdateLog">
+              <span v-if="updLogBusy" class="loading"></span>刷新
+            </button>
+            <button @click="closeUpdateLog">关闭</button>
+          </h3>
+          <p class="muted" style="font-size: 12px; margin-top: 4px">仅展示与本次更新相关的后台命令输出（构建/重启等）</p>
+          <pre
+            ref="updLogPre"
+            class="md-text log-console"
+            style="max-height: 60vh; overflow: auto; margin-top: 8px; white-space: pre-wrap; word-break: break-word; font-family: monospace"
+            >{{ updLogContent || '（暂无日志）' }}</pre>
         </div>
       </div>
     </Teleport>
@@ -781,7 +807,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
+import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { pageTransitionIndex, setPageTransition, MODES } from '../platform.js';
 import WinExpander from '../winui/components/WinExpander.vue';
 import WinToggleSwitch from '../winui/components/WinToggleSwitch.vue';
@@ -1517,7 +1543,7 @@ const updPwShow = ref(false);
 const updPwErr = ref('');
 const updBusyTask = ref(false);
 // 更新日志 / 系统介绍弹窗
-const updLogModal = ref(false);
+const updChangelogModal = ref(false);
 const updReadmeModal = ref(false);
 const updReadmeBusy = ref(false);
 const updReadmeContent = ref('');
@@ -1525,6 +1551,14 @@ const updReadmeMsg = ref('');
 // 实时更新进度（触发更新后轮询 /update/status 的 progress）
 const updProgress = ref(null);
 let updProgressTimer = null;
+// 更新完成后自动刷新页面（服务重启恢复后 location.reload()）
+const updAutoReload = ref(false);
+// 详细更新日志（轮询 /api/update/log）
+const updLogModal = ref(false);
+const updLogContent = ref('');
+const updLogBusy = ref(false);
+let updLogTimer = null;
+const updLogPre = ref(null);
 
 const updLocal = computed(() => updStatus.value?.local || {});
 const updLastCheck = computed(() => updStatus.value?.lastCheck || null);
@@ -1557,13 +1591,20 @@ const updModalOkLabel = computed(() => ({
 }[pendingUpdAction.value] || '确定'));
 const updModalOkDanger = computed(() => pendingUpdAction.value === 'force');
 
-const updLogContent = computed(() => updLocal.value.changelog || updLastCheck.value?.changelog || '（暂无更新日志）');
+const updChangelogContent = computed(() => updLocal.value.changelog || updLastCheck.value?.changelog || '（暂无更新日志）');
 
 // 实时更新进度
 const updProgressShown = computed(() => !!updProgress.value && updProgress.value.running !== false);
 const updProgressPercent = computed(() => Math.min(100, Math.max(0, Number(updProgress.value?.percent) || 0)));
 const updProgressIndeterminate = computed(() => updProgressShown.value && updProgress.value.percent == null);
 const updProgressMessage = computed(() => updProgress.value?.message || (updProgress.value?.step ? `正在${updProgress.value.step}` : ''));
+
+// 详细更新日志内容更新时自动滚动到底部
+watch(updLogContent, () => {
+  if (updLogModal.value && updLogPre.value) {
+    updLogPre.value.scrollTop = updLogPre.value.scrollHeight;
+  }
+});
 
 const updMethodOptions = [
   { value: 'incremental', label: '增量对比' },
@@ -1747,6 +1788,7 @@ async function applyUpdateRun(pw, force) {
     await refreshUpdateStatus();
     return;
   }
+  updAutoReload.value = true;
   updApplySuccess.value = force
     ? (r?.message || '强制更新已开始，正在拉取最新代码…')
     : `更新已开始${r?.method ? `（${r.method}` : ''}${r?.version ? ` ${r.version}` : ''}${r?.method ? '）' : ''}，可在后台日志查看进度。`;
@@ -1786,6 +1828,11 @@ async function refreshUpdateProgress() {
     if (!p || p.running === false) {
       stopUpdateProgress();
       updProgress.value = null;
+      // 更新已完成（服务重启中）：若本次是成功发起的更新，则等待服务恢复后自动刷新页面
+      if (updAutoReload.value) {
+        updAutoReload.value = false;
+        autoReloadAfterUpdate();
+      }
     } else {
       updProgress.value = p;
     }
@@ -1801,9 +1848,68 @@ function stopUpdateProgress() {
   }
 }
 
+// ---- 更新完成自动刷新页面：服务重启后 /health 恢复时 location.reload() ----
+async function autoReloadAfterUpdate() {
+  for (let i = 0; i < 60; i++) {
+    try {
+      const resp = await fetch('/api/health', { signal: AbortSignal.timeout(3000) });
+      if (resp.ok) {
+        location.reload();
+        return;
+      }
+    } catch {
+      /* 服务尚未恢复，继续等待 */
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  location.reload();
+}
+
+// ---- 详细更新日志：打开弹窗即开始轮询 /api/update/log，关闭/卸载时停止 ----
+function openUpdateLog() {
+  updLogModal.value = true;
+  refreshUpdateLog();
+  startUpdateLogPoll();
+}
+
+function closeUpdateLog() {
+  updLogModal.value = false;
+  stopUpdateLogPoll();
+}
+
+function startUpdateLogPoll() {
+  stopUpdateLogPoll();
+  updLogTimer = setInterval(refreshUpdateLog, 1500);
+}
+
+function stopUpdateLogPoll() {
+  if (updLogTimer) {
+    clearInterval(updLogTimer);
+    updLogTimer = null;
+  }
+}
+
+async function refreshUpdateLog() {
+  if (updLogBusy.value) return;
+  updLogBusy.value = true;
+  try {
+    const r = await api.getUpdateLog();
+    if (r && typeof r.content === 'string') {
+      updLogContent.value = r.content;
+      nextTick(() => {
+        if (updLogPre.value) updLogPre.value.scrollTop = updLogPre.value.scrollHeight;
+      });
+    }
+  } catch {
+    /* 忽略瞬时失败，保留上次内容，下一轮轮询重试 */
+  } finally {
+    updLogBusy.value = false;
+  }
+}
+
 // ---- 更新日志 / 系统介绍弹窗 ----
 function openUpdChangelog() {
-  updLogModal.value = true;
+  updChangelogModal.value = true;
 }
 
 async function openUpdReadme() {
@@ -1838,5 +1944,6 @@ onMounted(() => {
 onUnmounted(() => {
   clearInterval(logTimer);
   stopUpdateProgress();
+  stopUpdateLogPoll();
 });
 </script>

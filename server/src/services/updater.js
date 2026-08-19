@@ -269,7 +269,7 @@ export function runUpdater({ method, stagingDir, targetVersion, changelog }) {
   const child = spawn(process.execPath, [script, '--cmd=' + tmp], {
     detached: true,
     stdio: 'ignore',
-    env: { ...process.env, UPDATE_PM2_NAME: pm2 }
+    env: { ...process.env, UPDATE_PM2_NAME: pm2, PORT: getEnv('PORT', '8787') }
   });
   child.unref();
   logger.info(`已触发独立更新进程 pid=${child.pid} method=${method} version=${targetVersion}`);

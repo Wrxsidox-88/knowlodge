@@ -180,6 +180,7 @@ export const api = {
   saveUpdateSettings: (values) => http.post('/update/settings', { values }),
   applyUpdate: (payload) => http.post('/update/apply', payload),
   getUpdateReadme: () => http.get('/update/readme'),
+  getUpdateLog: () => http.get('/update/log'),
 
   monitor: () => http.get('/monitor'),
 
