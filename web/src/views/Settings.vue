@@ -1754,9 +1754,8 @@ async function saveUpdateSettingsRun(pw) {
     repo: updRepo.value.trim(),
     proxy: updUseProxy.value ? updProxyUrl.value.trim() : '',
     intervalHours: Number(updInterval.value) || 0,
-    autoMode: updAutoMode.value,
-    password: pw
-  });
+    autoMode: updAutoMode.value
+  }, pw);
   if (r && r.error) throw new Error(r.error);
   updSaved.value = true;
   await refreshUpdateStatus();

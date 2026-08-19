@@ -65,10 +65,10 @@ updateRouter.post('/settings', (req, res) => {
   if (!requirePassword(req.user, req.body?.password || '')) {
     return res.status(403).json({ error: '密码验证失败，无法修改更新设置' });
   }
-  const v = req.body?.values || {};
+  const v = req.body?.values || req.body || {}; // 兼容 {values} 与扁平两种结构
   const updates = {};
   for (const [k, env] of Object.entries(KEY_TO_ENV)) {
-    if (k in v) updates[env] = String(v[k] ?? '').trim();
+    if (k in v && k !== 'password') updates[env] = String(v[k] ?? '').trim();
   }
   if (!Object.keys(updates).length) return res.status(400).json({ error: '没有可保存的设置' });
   try {
