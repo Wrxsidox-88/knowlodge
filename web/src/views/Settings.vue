@@ -1828,17 +1828,16 @@ async function refreshUpdateProgress() {
     updStatus.value = s;
     const p = s.progress;
     if (p && p.running === true) updSawRunning.value = true; // 曾真正进入运行态
-    if (!p || p.running === false) {
+    // 关键修复：空闲(null/初始 idle)时绝不停止轮询——
+    // 否则更新刚发起那一瞬读到 null 就会停掉定时器，下载阶段进度条永不出现且不再更新
+    if (p && p.running === false && updSawRunning.value) {
+      // 更新确实运行过且已结束 → 停止轮询；若本次成功发起则等待服务恢复后自动刷新
       stopUpdateProgress();
       updProgress.value = null;
-      // 更新已完成：仅当本次成功发起且确实运行过，等待服务恢复后自动刷新页面
-      if (updAutoReload.value && updSawRunning.value) {
-        updAutoReload.value = false;
-        autoReloadAfterUpdate();
-      }
-    } else {
-      updProgress.value = p;
+      if (updAutoReload.value) { updAutoReload.value = false; autoReloadAfterUpdate(); }
+      return;
     }
+    updProgress.value = (p && p.running === true) ? p : null;
   } catch {
     /* 忽略瞬时失败，等待下一轮轮询 */
   }

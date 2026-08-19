@@ -118,7 +118,7 @@ async function prepareFull(staging) {
   const url = `https://codeload.github.com/${owner}/${repo}/tar.gz/${branch}`;
   let total = 0;
   try {
-    const hd = await execFileAsync('curl', ['-fsSL', '-I', '-L', url]);
+    const hd = await execFileAsync('curl', ['-fsSL', '-I', '-L', url], { timeout: 15000 });
     const m = /content-length:\s*(\d+)/i.exec(hd);
     if (m) total = Number(m[1]);
   } catch { /* 大小未知 → 前端显示不确定进度 */ }
@@ -134,7 +134,7 @@ async function prepareFull(staging) {
 // curl 流式下载并轮询文件大小，写入下载进度与实时速度
 function downloadWithProgress(url, outFile, total) {
   return new Promise((resolve, reject) => {
-    const child = execFile('curl', ['-fsSL', '-L', url, '-o', outFile]);
+    const child = execFile('curl', ['-fsSL', '-L', url, '-o', outFile], { timeout: 180000 });
     let last = 0;
     const iv = setInterval(() => {
       let done = 0;

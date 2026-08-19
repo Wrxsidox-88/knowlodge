@@ -122,6 +122,7 @@ async function buildWeb() {
 }
 
 async function restartPm2(name) {
+  if (process.env.UPDATE_TEST_NO_RESTART === '1') { writeProgress('restart', 82, '[测试] 跳过 PM2 重启'); log('[测试] 跳过 PM2 重启'); return true; }
   log(`重启 PM2 进程 ${name} ...`);
   const attempts = [
     { cmd: 'pm2', args: ['reload', name], label: 'pm2 reload' },
@@ -143,6 +144,7 @@ async function restartPm2(name) {
 }
 
 async function healthCheck(port, timeoutSec = 180) {
+  if (process.env.UPDATE_TEST_NO_RESTART === '1') { writeProgress('health', 95, '[测试] 跳过健康检测'); log('[测试] 跳过健康检测'); return true; }
   const deadline = Date.now() + timeoutSec * 1000;
   let tries = 0;
   while (Date.now() < deadline) {
