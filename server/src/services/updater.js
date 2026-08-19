@@ -254,6 +254,9 @@ export function readProgress() {
 export function clearProgress() {
   try { fs.writeFileSync(PROGRESS_FILE, JSON.stringify({ running: false, step: 'idle', percent: 0, message: '', ts: Date.now() }), 'utf8'); } catch {}
 }
+export function writeProgress(step, percent, message, done = false) {
+  try { fs.writeFileSync(PROGRESS_FILE, JSON.stringify({ running: !done, step, percent, message, ts: Date.now() }, null, 2), 'utf8'); } catch {}
+}
 
 // ---------- 触发独立更新进程 ----------
 export function runUpdater({ method, stagingDir, targetVersion, changelog }) {

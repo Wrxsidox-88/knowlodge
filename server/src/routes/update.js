@@ -8,7 +8,7 @@ import { db, verifyPassword } from '../db.js';
 import {
   updateConfig, localVersion, localChangelog, checkUpstream, lastCheck, lastResult, readRunLog,
   diffPlan, prepareIncremental, runUpdater, runningTasks, parseRepo, DATA_DIR, PROJECT_ROOT,
-  readProgress, clearProgress
+  readProgress, clearProgress, writeProgress
 } from '../services/updater.js';
 
 export const updateRouter = Router();
@@ -97,16 +97,50 @@ updateRouter.get('/readme', (req, res) => {
   }
 });
 
-// 下载仓库 tarball 并解压，返回 full 暂存根目录
+// 下载仓库 tarball 并解压，返回 full 暂存根目录（下载过程实时写进度：已下载/总量/速度）
 async function prepareFull(staging) {
   const cfg = updateConfig();
   const { owner, repo } = parseRepo(cfg.repo);
   const branch = cfg.branch || 'HEAD';
   const tgz = path.join(staging, 'repo.tgz');
-  await execFileAsync('curl', ['-fsSL', '-L', `https://codeload.github.com/${owner}/${repo}/tar.gz/${branch}`, '-o', tgz], { timeout: 120000 });
+  const url = `https://codeload.github.com/${owner}/${repo}/tar.gz/${branch}`;
+  let total = 0;
+  try {
+    const hd = await execFileAsync('curl', ['-fsSL', '-I', '-L', url]);
+    const m = /content-length:\s*(\d+)/i.exec(hd);
+    if (m) total = Number(m[1]);
+  } catch { /* 大小未知 → 前端显示不确定进度 */ }
+  writeProgress('download', 3, '正在获取完整包大小…');
+  await downloadWithProgress(url, tgz, total);
+  writeProgress('unpack', 40, '正在解压完整包…');
   await execFileAsync('tar', ['-xzf', tgz, '-C', staging]);
   const entries = fs.readdirSync(staging).filter((n) => n !== 'repo.tgz');
+  writeProgress('unpack', 45, '解压完成');
   return path.join(staging, entries[0]);
+}
+
+// curl 流式下载并轮询文件大小，写入下载进度与实时速度
+function downloadWithProgress(url, outFile, total) {
+  return new Promise((resolve, reject) => {
+    const child = execFile('curl', ['-fsSL', '-L', url, '-o', outFile]);
+    let last = 0;
+    const iv = setInterval(() => {
+      let done = 0;
+      try { done = fs.statSync(outFile).size; } catch {}
+      const speed = (done - last) / 0.5;             // bytes/s
+      last = done;
+      const pct = total > 0 ? Math.min(99, Math.round(3 + 37 * (done / total))) : null;
+      const mb = (done / 1048576).toFixed(1);
+      const tot = total > 0 ? (total / 1048576).toFixed(1) : '?';
+      const sp = speed > 0 ? (speed / 1048576).toFixed(2) : '0';
+      writeProgress('download', pct, `正在下载完整包 ${mb} MB / ${tot} MB（${sp} MB/s）`);
+    }, 500);
+    child.on('close', (code) => {
+      clearInterval(iv);
+      if (code === 0) resolve();
+      else reject(new Error('下载失败（curl exit=' + code + '）'));
+    });
+  });
 }
 
 function execFileAsync(cmd, args, opts) {
@@ -126,6 +160,7 @@ updateRouter.post('/apply', async (req, res, next) => {
     if (!requirePassword(req.user, password)) {
       return res.status(403).json({ error: '密码验证失败，无法执行更新' });
     }
+    clearProgress(); // 下载/解压/替换全程写进度
     // 强制更新：不做任何一致性/差异检查，直接以完整包替换覆盖本地（无论仓库是否一致）
     const m = (method === 'full' || force) ? 'full' : 'incremental';
     let tgt = targetVersion || null;
@@ -147,7 +182,6 @@ updateRouter.post('/apply', async (req, res, next) => {
       tgt = tgt || plan.remoteVersion;
       chg = chg || plan.changelog || '';
     }
-    clearProgress();
     const started = runUpdater({ method: m, stagingDir, targetVersion: tgt, changelog: chg });
     if (!started.started) return res.status(409).json({ error: '更新启动失败', busy: started.tasks });
     res.json({ ok: true, started: true, method: m, version: tgt, pid: started.pid, stagingDir });

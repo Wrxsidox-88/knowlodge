@@ -126,7 +126,10 @@ async function restartPm2(name) {
 
 async function healthCheck(port, timeoutSec = 180) {
   const deadline = Date.now() + timeoutSec * 1000;
+  let tries = 0;
   while (Date.now() < deadline) {
+    tries++;
+    writeProgress('health', Math.min(99, 88 + tries), `服务健康检测中（第 ${tries} 次，剩余 ${Math.ceil((deadline - Date.now()) / 1000)}s）`);
     try {
       const r = await new Promise((res, rej) => {
         const req = http.get({ host: '127.0.0.1', port, path: '/api/health', timeout: 6000 }, (res2) => res(res2));
@@ -201,6 +204,7 @@ try {
   } catch (e) {
     log('更新后健康检测未通过，执行回滚: ' + e.message);
     await rollback(backupDir, created, pm2, port);
+    writeProgress('failed', 0, '更新失败，已自动回滚', true);
     ok = false;
     resum({ ts: Date.now(), ok: false, method, version: targetVersion, reason: '构建/重启/健康检测异常，已回滚: ' + e.message, logFile: RUN_LOG });
     process.exit(1);

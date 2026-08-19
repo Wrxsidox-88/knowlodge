@@ -1730,17 +1730,26 @@ async function applyUpdateRun(pw, force) {
   if (lc?.remoteVersion) payload.targetVersion = lc.remoteVersion;
   if (lc?.changelog) payload.changelog = lc.changelog;
   if (force) payload.force = true;
-  const r = await api.applyUpdate(payload);
+  // 先启动轮询：下载/解压/替换/重启全阶段实时显示进度（含下载速度）
+  startUpdateProgress();
+  let r;
+  try {
+    r = await api.applyUpdate(payload);
+  } catch (e) {
+    stopUpdateProgress();
+    updProgress.value = null;
+    throw e;
+  }
   if (r?.skipped) {
     updApplySuccess.value = r.message || '已跳过：本地已与仓库一致';
     stopUpdateProgress();
+    updProgress.value = null;
     await refreshUpdateStatus();
     return;
   }
   updApplySuccess.value = force
     ? (r?.message || '强制更新已开始，正在拉取最新代码…')
     : `更新已开始${r?.method ? `（${r.method}` : ''}${r?.version ? ` ${r.version}` : ''}${r?.method ? '）' : ''}，可在后台日志查看进度。`;
-  startUpdateProgress();
   await refreshUpdateStatus();
 }
 
