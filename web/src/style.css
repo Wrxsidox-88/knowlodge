@@ -610,6 +610,25 @@ html.theme-dark .content-bottom-space {
   flex-shrink: 0;
 }
 
+/* 开发者选项：固定于页面右下角的浮动面板，不参与正常流布局（避免挤压/上移导航或页眉） */
+.dev-float {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 5000;
+  width: min(360px, calc(100vw - 32px));
+  background: var(--ctrl-fill-secondary, rgba(255, 255, 255, 0.8));
+  border: 1px solid var(--stroke-divider);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  max-height: 80vh;
+  overflow: auto;
+}
+.dev-float .win-expander-content {
+  max-height: 60vh;
+  overflow: auto;
+}
+
 /* 日志弹窗 */
 .log-modal {
   width: min(780px, 94vw);

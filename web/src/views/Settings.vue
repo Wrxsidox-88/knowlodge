@@ -584,30 +584,32 @@
       </div>
     </div>
 
-    <!-- 开发者选项（开发者模式开启后显示） -->
-    <WinExpander id="dev-options" v-if="devEnabled" class="settings-expander" Header="开发者选项" HeaderIcon="&#xE71D;" v-model:IsExpanded="devExpandOpen">
-      <div class="dev-actions">
-        <div class="dev-row">
-          <div>
-            <div class="dev-title">查看详细日志</div>
-            <div class="muted" style="font-size: 12px">AI 分析、流式对话等详细运行日志；弹窗查看并每 5 秒自动刷新（首页不再显示日志）</div>
+    <!-- 开发者选项（开发者模式开启后显示）——右侧固定浮动面板，不参与页面流布局，避免挤压/上移导航 -->
+    <div v-if="devEnabled" id="dev-options" class="dev-float">
+      <WinExpander class="settings-expander" Header="开发者选项" HeaderIcon="&#xE71D;" v-model:IsExpanded="devExpandOpen">
+        <div class="dev-actions">
+          <div class="dev-row">
+            <div>
+              <div class="dev-title">查看详细日志</div>
+              <div class="muted" style="font-size: 12px">AI 分析、流式对话等详细运行日志；弹窗查看并每 5 秒自动刷新（首页不再显示日志）</div>
+            </div>
+            <button @click="openLogs">打开日志</button>
           </div>
-          <button @click="openLogs">打开日志</button>
-        </div>
-        <div class="dev-row">
-          <div>
-            <div class="dev-title">清空系统数据</div>
-            <div class="muted" style="font-size: 12px">删除全部材料、知识图谱、错题、考试、倒计时等数据；需二次确认并输入密码</div>
+          <div class="dev-row">
+            <div>
+              <div class="dev-title">清空系统数据</div>
+              <div class="muted" style="font-size: 12px">删除全部材料、知识图谱、错题、考试、倒计时等数据；需二次确认并输入密码</div>
+            </div>
+            <button class="danger" @click="openClear">清空数据</button>
           </div>
-          <button class="danger" @click="openClear">清空数据</button>
         </div>
-      </div>
-      <div class="toolbar" style="margin-top: 12px">
-        <span class="muted" style="font-size: 12px">关闭后页面将自动刷新回到普通模式。</span>
-        <div class="spacer"></div>
-        <button @click="closeDev">关闭开发者模式</button>
-      </div>
-    </WinExpander>
+        <div class="toolbar" style="margin-top: 12px">
+          <span class="muted" style="font-size: 12px">关闭后页面将自动刷新回到普通模式。</span>
+          <div class="spacer"></div>
+          <button @click="closeDev">关闭开发者模式</button>
+        </div>
+      </WinExpander>
+    </div>
 
     <!-- 开发者模式开启弹窗：确认同意风险 + 输入密码 -->
     <div v-if="devModal" class="modal-mask">
@@ -952,11 +954,6 @@ async function loadDev() {
   } finally {
     devStatusLoaded.value = true;
     devExpandOpen.value = true;
-    if (devEnabled.value) {
-      nextTick(() => {
-        document.getElementById('dev-options')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      });
-    }
   }
 }
 
@@ -979,9 +976,6 @@ function onSysRow(key) {
       if (devEnabled.value || devStatusLoaded) {
         devEnabled.value = true; // 即使 status 未及时同步也强制显示开发者选项
         devAlreadyModal.value = true; // 已开启：弹窗提示，不再进入开启流程
-        nextTick(() => {
-          document.getElementById('dev-options')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        });
       } else {
         devModal.value = true;
       }
@@ -1006,10 +1000,6 @@ async function confirmDev() {
     devAgree.value = false;
     devEnabled.value = true;
     devPw.value = '';
-    // 开启成功后自动滚动定位到「开发者选项」区域，避免"看不到选项"
-    nextTick(() => {
-      document.getElementById('dev-options')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    });
   } catch (e) {
     devErr.value = (e.response?.data?.error) || e.message || '开启失败';
   } finally {
