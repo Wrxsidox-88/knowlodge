@@ -28,6 +28,13 @@ function requirePassword(user, password) {
   return Boolean(row && verifyPassword(password, row.password_hash));
 }
 
+// 兜底：进度 running 但长时间无更新的（如更新进程意外终止）视为失效，避免前端永远停在某个步骤
+function guardStaleProgress(p) {
+  if (!p) return p;
+  if (p.running !== false && p.ts && Date.now() - p.ts > 15 * 60 * 1000) return null;
+  return p;
+}
+
 updateRouter.get('/status', (req, res) => {
   const cfg = updateConfig();
   const state = lastCheck();
@@ -48,7 +55,7 @@ updateRouter.get('/status', (req, res) => {
     lastCheck: state,
     lastResult: result,
     busy: runningTasks(),
-    progress: readProgress(),
+    progress: guardStaleProgress(readProgress()),
     runLog: result?.ok || result?.reason ? readRunLog().slice(-4000) : ''
   });
 });
