@@ -75,6 +75,9 @@
         </main>
       </WinNavigationView>
     </div>
+
+    <!-- 开发者选项浮动面板：全局持久（切换页面不消失），仅登录后显示 -->
+    <DevPanel />
   </div>
 
   <!-- 全局 WinUI 对话框宿主（替代浏览器 alert/confirm/prompt） -->
@@ -112,6 +115,8 @@ import { api } from './api.js';
 import { theme, toggleTheme } from './theme.js';
 import { pageTransition } from './platform.js';
 import { dialogState, settleDialog } from './dialogs.js';
+import { devState } from './devState.js';
+import DevPanel from './components/DevPanel.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -271,6 +276,13 @@ onMounted(async () => {
   try {
     const data = await api.me();
     user.value = data.user;
+  } catch {
+    /* 忽略 */
+  }
+  // 同步开发者模式状态（服务端持久化），使浮动面板在刷新/切页后依然可见
+  try {
+    const d = await api.devStatus();
+    devState.enabled = !!d.enabled;
   } catch {
     /* 忽略 */
   }
