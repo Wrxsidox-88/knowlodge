@@ -382,6 +382,13 @@
 
       <h3 style="margin-top: 14px">设置</h3>
       <label class="field">
+        <span>更新模式（默认）</span>
+        <WinRadioButtons :SelectedIndex="updMethodIndex" MaxColumns="2" @SelectionChanged="onUpdMethodChanged">
+          <WinRadioButton v-for="o in updMethodOptions" :key="o.value" :Content="o.label" />
+        </WinRadioButtons>
+        <div class="muted" style="font-size: 12px; margin-top: 4px">{{ updMethodDesc }}</div>
+      </label>
+      <label class="field" style="margin-top: 8px">
         <span>仓库地址</span>
         <input v-model="updRepo" placeholder="https://github.com/Wrxsidox-88/knowlodge" />
       </label>
@@ -715,9 +722,47 @@
     <!-- 更新操作弹窗（应用更新 / 强制更新 / 保存设置，通用密码确认）：需验证当前账户密码 -->
     <Teleport to="body">
       <div v-if="updModal" class="modal-mask" @click.self="closeApply">
-        <div class="modal" style="width: min(440px, 92vw)">
+        <div class="modal" style="width: min(560px, 94vw)">
           <h3>{{ updModalTitle }}</h3>
           <p class="muted" style="font-size: 13px; line-height: 1.7; margin-bottom: 12px">{{ updModalDesc }}</p>
+
+          <!-- 更新模式选择（应用更新 / 强制更新时可选：增量 or 全量） -->
+          <template v-if="pendingUpdAction === 'apply' || pendingUpdAction === 'force'">
+            <div class="muted" style="font-size: 12px; margin: 2px 0 4px">更新模式</div>
+            <WinRadioButtons :SelectedIndex="updMethodIndex" MaxColumns="2" @SelectionChanged="onUpdMethodChanged">
+              <WinRadioButton v-for="o in updMethodOptions" :key="o.value" :Content="o.label" />
+            </WinRadioButtons>
+            <div class="muted" style="font-size: 12px; margin-top: 4px">{{ updMethodDesc }}</div>
+
+            <!-- 增量模式：差异文件预览（新增/修改/删除） -->
+            <div v-if="updMethod === 'incremental'" class="node-card" style="margin-top: 10px">
+              <div style="display: flex; align-items: center; gap: 8px">
+                <span class="muted" style="font-size: 12px">差异文件预览</span>
+                <div class="spacer"></div>
+                <button class="small" :disabled="updDiffBusy" @click="loadUpdDiff">
+                  <span v-if="updDiffBusy" class="loading"></span>重新对比
+                </button>
+              </div>
+              <div v-if="updDiffErr" class="muted danger" style="font-size: 12px; margin-top: 6px">{{ updDiffErr }}（仍可继续，更新模块接管后会重新对比）</div>
+              <template v-else-if="updDiff">
+                <div style="display: flex; gap: 6px; margin-top: 6px">
+                  <span class="badge done">新增 {{ updDiff.counts.create }}</span>
+                  <span class="badge">修改 {{ updDiff.counts.modify }}</span>
+                  <span class="badge pending">删除 {{ updDiff.counts.delete }}</span>
+                </div>
+                <div v-if="updDiff.counts.total === 0" class="muted" style="font-size: 12px; margin-top: 6px">本地代码与仓库一致，没有需要更新的文件。</div>
+                <div v-else class="diff-list">
+                  <div v-for="f in updDiff.files" :key="f.action + ':' + f.path" class="diff-item">
+                    <span class="diff-action" :class="f.action">{{ { create: '新增', modify: '修改', delete: '删除' }[f.action] }}</span>
+                    <span class="diff-path">{{ f.path }}</span>
+                  </div>
+                </div>
+              </template>
+              <div v-else class="muted" style="font-size: 12px; margin-top: 6px"><span class="loading"></span> 正在对比仓库差异…</div>
+            </div>
+          </template>
+
+          <div class="muted" style="font-size: 12px; margin: 12px 0 6px">输入当前账户密码确认：</div>
           <div class="pw-row">
             <WinPasswordBox v-model:Password="updPw" :PasswordRevealMode="updPwShow ? 'Visible' : 'Hidden'" PlaceholderText="输入当前账户密码" :Width="'100%'" @Enter="confirmUpdAction" />
             <WinCheckBox v-model:IsChecked="updPwShow" Content="显示密码" />
@@ -1385,7 +1430,37 @@ const updProxyUrl = ref('');
 const updUseProxy = ref(false);
 const updInterval = ref(24);
 const updAutoMode = ref('notify');
-const updMethod = ref('full');
+// 更新模式：incremental=增量（替换变更/新增文件并删除仓库已移除文件）；full=全量（完整包覆盖全部本地代码）
+const updMethod = ref('incremental');
+const updMethodOptions = [
+  { value: 'incremental', label: '增量更新' },
+  { value: 'full', label: '全量更新' }
+];
+const updMethodIndex = computed(() => Math.max(0, updMethodOptions.findIndex((o) => o.value === updMethod.value)));
+const updMethodLabel = computed(() => (updMethod.value === 'full' ? '全量更新' : '增量更新'));
+const updMethodDesc = computed(() => updMethod.value === 'full'
+  ? '全量更新：下载仓库完整包，直接覆盖全部本地代码（server/data 数据、.env 配置与依赖目录不受影响）。'
+  : '增量更新：对比仓库差异，仅替换发生变更/新增的文件，并删除仓库中已移除的文件。');
+function onUpdMethodChanged({ SelectedIndex }) {
+  const o = updMethodOptions[SelectedIndex];
+  if (o) updMethod.value = o.value;
+}
+// 增量更新差异预览（弹窗打开时自动加载）
+const updDiff = ref(null);
+const updDiffBusy = ref(false);
+const updDiffErr = ref('');
+async function loadUpdDiff() {
+  updDiffBusy.value = true;
+  updDiffErr.value = '';
+  updDiff.value = null;
+  try {
+    updDiff.value = await api.getUpdateDiff();
+  } catch (e) {
+    updDiffErr.value = (e.response?.data?.error) || e.message || '差异对比失败';
+  } finally {
+    updDiffBusy.value = false;
+  }
+}
 const updApplying = ref(false);
 const updApplySuccess = ref('');
 // 通用密码确认弹窗：应用更新 / 强制更新 / 保存设置
@@ -1404,12 +1479,14 @@ const updReadmeMsg = ref('');
 // 实时更新进度（触发更新后轮询 /update/status 的 progress）
 const updProgress = ref(null);
 let updProgressTimer = null;
-// 更新完成后自动刷新页面（服务重启恢复后 location.reload()）
+// 更新完成后自动刷新页面（检测到更新模块返回「更新成功」后 location.reload()）
 const updAutoReload = ref(false);
 // 防抖：只有进度确实进入过“运行中”之后结束，才允许自动刷新（避免应用启动瞬间误触发）
 const updSawRunning = ref(false);
 // 已触发自动刷新（保证只刷新一次）
 const updReloadFired = ref(false);
+// 本次更新的客户端发起时间戳：用于识别「本次更新」产生的结果（区别于历史结果）
+const updRunTs = ref(0);
 // 详细更新日志（轮询 /api/update/log）
 const updLogModal = ref(false);
 const updLogContent = ref('');
@@ -1431,13 +1508,15 @@ const updModalTitle = computed(() => ({
 }[pendingUpdAction.value] || '更新操作'));
 const updModalDesc = computed(() => {
   if (pendingUpdAction.value === 'apply') {
-    return `将更新至新版本${updLastCheck.value?.remoteVersion ? ' ' + updLastCheck.value.remoteVersion : ''}（${updMethodConfigLabel.value}）。输入当前账户密码确认：`;
+    return `将更新至新版本${updLastCheck.value?.remoteVersion ? ' ' + updLastCheck.value.remoteVersion : ''}（当前为 ${updMethodLabel.value}）。确认后将由专用更新模块接管：下载 → 备份 → 替换 → 构建 → 重启 → 自检，自检失败自动紧急回滚。输入当前账户密码确认：`;
   }
   if (pendingUpdAction.value === 'force') {
-    return '强制更新将不做任何检查，直接从仓库拉取完整包覆盖本地代码（无论仓库是否一致）。确认后输入当前账户密码：';
+    return updMethod.value === 'full'
+      ? '强制全量更新：不做版本检查，直接以仓库完整包覆盖全部本地代码（数据与 .env 配置不受影响）。确认后将由专用更新模块接管，自检失败自动紧急回滚。输入当前账户密码确认：'
+      : '强制增量更新：不做版本检查，直接以仓库为准同步差异（变更/新增/删除文件）。确认后将由专用更新模块接管，自检失败自动紧急回滚。输入当前账户密码确认：';
   }
   if (pendingUpdAction.value === 'save') {
-    return '保存仓库地址、代理、更新间隔与自动更新策略。输入当前账户密码确认：';
+    return '保存仓库地址、代理、更新间隔、自动更新策略与默认更新模式。输入当前账户密码确认：';
   }
   return '';
 });
@@ -1472,7 +1551,6 @@ const updAutoIndex = computed(() => {
   const i = updAutoOptions.findIndex((o) => o.value === updAutoMode.value);
   return i < 0 ? 0 : i;
 });
-const updMethodConfigLabel = computed(() => updMethod.value || 'full');
 
 function onUpdAutoChanged({ SelectedIndex }) {
   const o = updAutoOptions[SelectedIndex];
@@ -1491,6 +1569,7 @@ async function refreshUpdateStatus() {
         updUseProxy.value = !!c.proxy;
         updInterval.value = c.intervalHours ?? 24;
         updAutoMode.value = c.autoMode || 'notify';
+        updMethod.value = c.method === 'full' ? 'full' : 'incremental';
         updLoaded.value = true;
       }
       updProxyUrl.value = c.proxy || '';
@@ -1537,6 +1616,8 @@ function openUpdAction(action) {
   updApplySuccess.value = '';
   pendingUpdAction.value = action;
   updModal.value = true;
+  // 应用/强制更新打开弹窗时预加载增量差异预览（全量模式不使用，但切换模式时可见）
+  if (action === 'apply' || action === 'force') loadUpdDiff();
 }
 
 function closeApply() {
@@ -1591,12 +1672,14 @@ async function confirmUpdAction() {
 }
 
 async function applyUpdateRun(pw, force) {
-  const payload = { password: pw };
+  const payload = { password: pw, method: updMethod.value };
   const lc = updLastCheck.value;
   if (lc?.remoteVersion) payload.targetVersion = lc.remoteVersion;
   if (lc?.changelog) payload.changelog = lc.changelog;
   if (force) payload.force = true;
-  // 先启动轮询：下载/解压/替换/重启全阶段实时显示进度（含下载速度）
+  // 记录本次更新发起时间（用于识别本次更新的结果）；先启动轮询，下载起即可见实时进度
+  updRunTs.value = Date.now();
+  updSawRunning.value = false;
   startUpdateProgress();
   let r;
   try {
@@ -1615,9 +1698,7 @@ async function applyUpdateRun(pw, force) {
   }
   updAutoReload.value = true;
   updReloadFired.value = false;
-  updApplySuccess.value = force
-    ? (r?.message || '强制更新已开始，正在拉取最新代码…')
-    : `更新已开始${r?.method ? `（${r.method}` : ''}${r?.version ? ` ${r.version}` : ''}${r?.method ? '）' : ''}，可在后台日志查看进度。`;
+  updApplySuccess.value = `更新已开始（${updMethodLabel.value}），更新模块已接管：下载 → 备份 → 替换 → 构建 → 重启 → 自检。可点击下方「更新日志」查看详细输出。`;
   await refreshUpdateStatus();
 }
 
@@ -1629,7 +1710,8 @@ async function saveUpdateSettingsRun(pw) {
     repo: updRepo.value.trim(),
     proxy: updUseProxy.value ? updProxyUrl.value.trim() : '',
     intervalHours: Number(updInterval.value) || 0,
-    autoMode: updAutoMode.value
+    autoMode: updAutoMode.value,
+    method: updMethod.value
   }, pw);
   if (r && r.error) throw new Error(r.error);
   updSaved.value = true;
@@ -1649,26 +1731,39 @@ async function refreshUpdateProgress() {
     if (!s) return;
     updStatus.value = s;
     const p = s.progress;
+    const result = s.lastResult;
+    const isThisRun = (r) => !!r && Number(r.ts) >= updRunTs.value - 5000;
     if (p && p.running === true) updSawRunning.value = true; // 曾真正进入运行态
-    // 重启/健康阶段：检测到“正在重启 PM2”即开始等待服务恢复后刷新（不必等更新进程结束；
-    // 即使 PM2 挂起或健康检测未跑完，只要 /health 恢复就刷新页面）
-    if (p && p.running === true && (p.step === 'restart' || p.step === 'health')
-        && updAutoReload.value && updSawRunning.value && !updReloadFired.value) {
+
+    // 关键：检测到更新模块返回「更新成功」→ 自动刷新页面（重启期间请求会短暂失败，属正常现象）
+    if (updAutoReload.value && updSawRunning.value && !updReloadFired.value
+        && result && result.ok && !result.skipped && isThisRun(result)) {
       updReloadFired.value = true;
-      autoReloadAfterUpdate();
-    }
-    // 关键修复：空闲(null/初始 idle)时绝不停止轮询——
-    // 否则更新刚发起那一瞬读到 null 就会停掉定时器，下载阶段进度条永不出现且不再更新
-    if (p && p.running === false && updSawRunning.value) {
-      // 更新确实运行过且已结束 → 停止轮询；若本次成功发起则等待服务恢复后自动刷新
       stopUpdateProgress();
       updProgress.value = null;
-      if (updAutoReload.value && !updReloadFired.value) { updReloadFired.value = true; autoReloadAfterUpdate(); }
+      updErr.value = false;
+      updApplySuccess.value = `更新成功${result.version ? '（v' + result.version + '）' : ''}，即将自动刷新页面…`;
+      setTimeout(() => autoReloadAfterUpdate(), 800);
       return;
     }
+
+    // 更新确实运行过且已结束（非成功）→ 停止轮询并展示结果；失败时服务已由回滚恢复，不刷新页面
+    if (p && p.running === false && updSawRunning.value) {
+      stopUpdateProgress();
+      updProgress.value = null;
+      if (result && !result.ok && isThisRun(result)) {
+        updErr.value = true;
+        updMsg.value = '更新失败：' + (result.reason || '未知原因') + (result.rolledBack ? '（已紧急回滚，服务已恢复到更新前状态）' : '');
+      } else if (result && result.skipped && isThisRun(result)) {
+        updApplySuccess.value = result.reason || '本地已与仓库一致，无需更新';
+      }
+      return;
+    }
+
+    // 空闲(null/初始 idle)时绝不停止轮询——否则更新刚发起那一瞬读到空闲态就会停掉定时器
     updProgress.value = (p && p.running === true) ? p : null;
   } catch {
-    /* 忽略瞬时失败，等待下一轮轮询 */
+    /* 重启期间请求失败属正常，等待下一轮轮询 */
   }
 }
 

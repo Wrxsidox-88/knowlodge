@@ -1,270 +1,24 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import { execFile, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { ROOT_DIR, getEnv } from '../config.js';
+import { spawn } from 'node:child_process';
 import { logger } from '../logger.js';
 import { db } from '../db.js';
+import { getEnv } from '../config.js';
+import {
+  PROJECT_ROOT, DATA_DIR, updateConfig, prepareFullStaging,
+  writeProgress, appendRunLog
+} from './updaterCore.js';
 
 // ============================================================
-// knowlodge 版本与更新服务
-//   版本文件统一存放相对路径 .release/.version 与 .release/.version.update
-//   （本地与仓库同一路径，见 README/仓库约定）
-//   基于 GitHub 仓库做检测对比与增量/全量更新；更新在主进程外由独立进程执行，
-//   具备 备份 -> 替换 -> 构建 -> 重启 -> 健康检测 -> 失败回滚 流程。
+// knowlodge 版本与更新服务（主进程侧）
+//   检测/对比/进度查询等纯逻辑见 updaterCore.js（与独立更新进程共用）。
+//   更新一经启动即由独立进程（server/scripts/updater-run.mjs）接管：
+//     下载 → 备份 → 替换/删除 → 依赖 → 构建 → 重启 → 自检 →（失败）紧急回滚
 // ============================================================
 
-export const PROJECT_ROOT = path.resolve(ROOT_DIR, '..'); // 仓库/项目根（.release、web 在项目根）
-const RELEASE_DIR = path.join(PROJECT_ROOT, '.release');
-const VERSION_FILE = path.join(RELEASE_DIR, '.version');
-const VERSION_UPDATE_FILE = path.join(RELEASE_DIR, '.version.update');
-const DATA_DIR_LOCAL = path.join(ROOT_DIR, 'data');
-export const DATA_DIR = DATA_DIR_LOCAL; // server/data
-const STATE_FILE = path.join(DATA_DIR, 'update-state.json');
-const RESULT_FILE = path.join(DATA_DIR, 'update-result.json');
-const RUN_LOG = path.join(DATA_DIR, 'update-run.log');
+export * from './updaterCore.js';
 
-const DEFAULT_REPO = 'https://github.com/Wrxsidox-88/knowlodge';
-
-// ---------- 配置 ----------
-export function updateConfig() {
-  return {
-    repo: getEnv('UPDATE_REPO', DEFAULT_REPO),
-    proxy: getEnv('UPDATE_PROXY', ''),
-    intervalHours: Number(getEnv('UPDATE_INTERVAL_HOURS', '6')) || 6,
-    // off=不自动检测;notify=仅检测提醒;download=检测并下载;auto=直接完成更新
-    autoMode: getEnv('UPDATE_AUTO_MODE', 'notify'),
-    // incremental=增量对比更新;full=完整包替换
-    method: getEnv('UPDATE_METHOD', 'incremental'),
-    branch: getEnv('UPDATE_BRANCH', '')
-  };
-}
-
-export function parseRepo(repo) {
-  const m = String(repo || '').trim().match(/(?:github\.com\/|^)([^/\s]+)\/([^/\s#]+?)(?:\.git)?$/i);
-  if (!m) throw new Error('仓库地址无法解析（需为 GitHub 仓库，如 https://github.com/owner/repo）');
-  return { owner: m[1], repo: m[2] };
-}
-
-// ---------- 版本比较 ----------
-export function parseVersion(str) {
-  if (typeof str !== 'string') return null;
-  const m = str.trim().match(/^v?(\d+)\.(\d+)\.(\d+)/);
-  if (!m) return null;
-  return { major: +m[1], minor: +m[2], patch: +m[3], raw: str.trim() };
-}
-
-export function isNewer(remote, local) {
-  const r = parseVersion(remote), l = parseVersion(local);
-  if (!r || !l) return false;
-  if (r.major !== l.major) return r.major > l.major;
-  if (r.minor !== l.minor) return r.minor > l.minor;
-  return r.patch > l.patch;
-}
-
-// ---------- 本地版本 ----------
-export function localVersion() {
-  try {
-    const v = fs.readFileSync(VERSION_FILE, 'utf8').trim();
-    return parseVersion(v) ? v : v;
-  } catch {
-    return null;
-  }
-}
-
-export function localChangelog() {
-  try {
-    return fs.readFileSync(VERSION_UPDATE_FILE, 'utf8');
-  } catch {
-    return '';
-  }
-}
-
-// ---------- curl 子进程（支持代理，无新增依赖）----------
-function curl(args, { timeout = 30000, proxy = '' } = {}) {
-  return new Promise((resolve, reject) => {
-    const a = ['-fsSL', '--max-time', String(Math.floor(timeout / 1000))];
-    if (proxy) a.push('--proxy', proxy);
-    a.push('-L', ...args);
-    execFile('curl', a, { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024, timeout: timeout + 2000 }, (err, stdout, stderr) => {
-      if (err) reject(new Error((stderr || err.message || '').slice(0, 300)));
-      else resolve(stdout);
-    });
-  });
-}
-
-async function fetchRaw(owner, repo, branch, pubPath, proxy, timeout = 30000) {
-  const url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${pubPath}`;
-  return curl([url], { timeout, proxy });
-}
-
-let _branchCache = null;
-async function ensureBranch(owner, repo, proxy) {
-  if (_branchCache) return _branchCache;
-  const cfg = updateConfig();
-  if (cfg.branch) { _branchCache = cfg.branch; return _branchCache; }
-  for (const b of ['HEAD', 'main', 'master']) {
-    try {
-      await fetchRaw(owner, repo, b, '.release/.version', proxy, 20000);
-      _branchCache = b;
-      return b;
-    } catch { /* try next */ }
-  }
-  _branchCache = 'HEAD';
-  return _branchCache;
-}
-
-// ---------- 检测上游 ----------
-export async function checkUpstream() {
-  const cfg = updateConfig();
-  const state = { checkedAt: new Date().toISOString(), ok: false, error: '', localVersion: localVersion(), remoteVersion: null, changelog: '', hasUpdate: false, branch: '' };
-  try {
-    const { owner, repo } = parseRepo(cfg.repo);
-    const branch = await ensureBranch(owner, repo, cfg.proxy);
-    state.branch = branch;
-    const remoteVersion = (await fetchRaw(owner, repo, branch, '.release/.version', cfg.proxy)).trim();
-    let changelog = '';
-    try { changelog = await fetchRaw(owner, repo, branch, '.release/.version.update', cfg.proxy); } catch { /* optional */ }
-    if (!parseVersion(remoteVersion)) { state.error = '仓库版本号无法解析'; }
-    else {
-      state.remoteVersion = remoteVersion;
-      state.localVersion = localVersion();
-      state.changelog = changelog;
-      state.hasUpdate = Boolean(localVersion()) && isNewer(remoteVersion, localVersion());
-      state.ok = true;
-    }
-  } catch (e) {
-    state.error = e.message;
-    state.ok = false;
-  }
-  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
-  return state;
-}
-
-export function lastCheck() {
-  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); }
-  catch { return null; }
-}
-
-// ---------- 文件清单对比（增量）----------
-function isExcluded(p) {
-  const segs = p.split('/');
-  for (const s of segs) {
-    if (['node_modules', '.git', 'winui-lib', '.idea', '.release', 'backups', '.tmp-e2e', '.uiupgrade', 'dist'].includes(s)) return true;
-  }
-  if (segs[0] === 'server' && segs[1] === 'data') return true;
-  if (p.endsWith('.env') || p === 'github-token.local' || p.endsWith('package-lock.json')) return true;
-  return false;
-}
-
-function gitBlobSha(content) {
-  const buf = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
-  return createHash('sha1').update('blob ' + buf.length + '\0').update(buf).digest('hex');
-}
-
-async function listRemoteFiles(owner, repo, branch, proxy) {
-  const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
-  const json = await curl([url, '-H', 'Accept: application/vnd.github+json'], { proxy, timeout: 60000 });
-  const d = JSON.parse(json);
-  return (d.tree || []).filter((e) => e.type === 'blob').map((e) => ({ path: e.path, sha: e.sha }));
-}
-
-export async function diffPlan() {
-  const cfg = updateConfig();
-  const { owner, repo } = parseRepo(cfg.repo);
-  const branch = await ensureBranch(owner, repo, cfg.proxy);
-  const files = await listRemoteFiles(owner, repo, branch, cfg.proxy);
-  const plan = [];
-  for (const f of files) {
-    if (isExcluded(f.path)) continue;
-    const lp = path.join(PROJECT_ROOT, f.path);
-    let need = false;
-    try {
-      if (gitBlobSha(fs.readFileSync(lp)) !== f.sha) need = true;
-    } catch { need = true; }
-    if (need) plan.push({ path: f.path, sha: f.sha, action: !fs.existsSync(lp) ? 'create' : 'modify' });
-  }
-  const local = localVersion();
-  const state = lastCheck();
-  return {
-    branch,
-    changedFiles: plan,
-    count: plan.length,
-    remoteVersion: state?.remoteVersion || null,
-    localVersion: local,
-    changelog: state?.changelog || ''
-  };
-}
-
-// ---------- 下载差异文件到暂存区 ----------
-export async function prepareIncremental(plan, branch) {
-  const cfg = updateConfig();
-  const { owner, repo } = parseRepo(cfg.repo);
-  const br = branch || (await ensureBranch(owner, repo, cfg.proxy));
-  const ts = Date.now();
-  const staging = path.join(DATA_DIR, 'update-staging', String(ts));
-  let done = 0;
-  for (const f of plan) {
-    const target = path.join(staging, f.path);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const url = `https://raw.githubusercontent.com/${owner}/${repo}/${br}/${f.path}`;
-    await curl([url, '-o', target], { proxy: cfg.proxy, timeout: 60000 });
-    done++;
-  }
-  // 版本文件
-  for (const vf of ['.release/.version', '.release/.version.update']) {
-    try {
-      const txt = await fetchRaw(owner, repo, br, vf, cfg.proxy);
-      const target = path.join(staging, vf);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, txt, 'utf8');
-    } catch { /* optional */ }
-  }
-  return { stagingDir: staging, downloaded: done };
-}
-
-// ---------- 完整包预取（统一使用完整更新：下载 codeload tarball 并解压到暂存）----------
-export async function prepareFullStaging() {
-  const cfg = updateConfig();
-  const { owner, repo } = parseRepo(cfg.repo);
-  const branch = cfg.branch || 'HEAD';
-  const ts = Date.now();
-  const staging = path.join(DATA_DIR, 'update-staging', String(ts));
-  fs.mkdirSync(staging, { recursive: true });
-  const url = `https://codeload.github.com/${owner}/${repo}/tar.gz/${branch}`;
-  const tgz = path.join(staging, 'repo.tgz');
-  const curlExec = (args, timeout) => new Promise((res, rej) => execFile('curl', args, { timeout }, (e) => (e ? rej(e) : res())));
-  writeProgress('download', 3, '正在获取完整包大小…');
-  let total = 0;
-  try {
-    const hd = await new Promise((res, rej) => execFile('curl', ['-fsSL', '-I', '-L', url].concat(cfg.proxy ? ['--proxy', cfg.proxy] : []), { timeout: 15000 }, (e, so) => (e ? rej(e) : res(so))));
-    const m = /content-length:\s*(\d+)/i.exec(hd);
-    if (m) total = Number(m[1]);
-  } catch { /* 大小未知 → indeterm 进度 */ }
-  await new Promise((resolve, reject) => {
-    const child = execFile('curl', ['-fsSL', '-L', url, '-o', tgz].concat(cfg.proxy ? ['--proxy', cfg.proxy] : []), { timeout: 180000 });
-    let last = 0;
-    const iv = setInterval(() => {
-      let done = 0;
-      try { done = fs.statSync(tgz).size; } catch {}
-      const speed = (done - last) / 0.5;
-      last = done;
-      const pct = total > 0 ? Math.min(99, Math.round(3 + 37 * (done / total))) : null;
-      const mb = (done / 1048576).toFixed(1);
-      const sp = speed > 0 ? (speed / 1048576).toFixed(2) : '0';
-      writeProgress('download', pct, `正在下载完整包 ${total > 0 ? mb + ' MB / ' + (total / 1048576).toFixed(1) + ' MB' : mb + ' MB'}（${sp} MB/s）`);
-    }, 500);
-    child.on('close', (code) => { clearInterval(iv); code === 0 ? resolve() : reject(new Error('下载失败 curl=' + code)); });
-  });
-  writeProgress('unpack', 40, '正在解压完整包…');
-  await new Promise((res, rej) => execFile('tar', ['-xzf', tgz, '-C', staging], { maxBuffer: 20 * 1024 * 1024 }, (e) => (e ? rej(e) : res())));
-  const entries = fs.readdirSync(staging).filter((n) => n !== 'repo.tgz');
-  writeProgress('unpack', 45, '解压完成');
-  return path.join(staging, entries[0]);
-}
-
-// ---------- 运行中任务检测 ----------
+// ---------- 运行中任务检测（更新前需等待为空）----------
 const BUSY_TABLES = [
   () => { try { return db.prepare("SELECT COUNT(*) c FROM analysis_jobs WHERE status IN ('running','pending')").get().c || 0; } catch { return 0; } }
 ];
@@ -274,37 +28,23 @@ export function runningTasks() {
   return total;
 }
 
-// ---------- 结果读取 ----------
-export function lastResult() {
-  try { return JSON.parse(fs.readFileSync(RESULT_FILE, 'utf8')); }
-  catch { return null; }
-}
-
-export function readRunLog() {
-  try { return fs.readFileSync(RUN_LOG, 'utf8'); }
-  catch { return ''; }
-}
-
-// ---------- 更新进度（供前端轮询进度条）----------
-const PROGRESS_FILE = path.join(DATA_DIR, 'update-progress.json');
-export function readProgress() {
-  try { return JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8')); }
-  catch { return null; }
-}
-export function clearProgress() {
-  try { fs.writeFileSync(PROGRESS_FILE, JSON.stringify({ running: false, step: 'idle', percent: 0, message: '', ts: Date.now() }), 'utf8'); } catch {}
-}
-export function writeProgress(step, percent, message, done = false) {
-  try { fs.writeFileSync(PROGRESS_FILE, JSON.stringify({ running: !done, step, percent, message, ts: Date.now() }, null, 2), 'utf8'); } catch {}
-}
-
 // ---------- 触发独立更新进程 ----------
-export function runUpdater({ method, stagingDir, targetVersion, changelog }) {
+// 本函数只负责写指令并 detached 启动更新模块，立即下载；
+// 下载/备份/替换/构建/重启/自检/回滚全部在更新模块内完成。
+export function runUpdater({ method, force = false, targetVersion = null, changelog = '', requestedBy = '' }) {
   if (runningTasks() > 0) return { started: false, busy: true, tasks: runningTasks() };
+  const m = method === 'full' ? 'full' : 'incremental';
   const pm2 = process.env.UPDATE_PM2_NAME || 'knowlodge';
-  const port = getEnv('PORT', '8787');
   const tmp = path.join(DATA_DIR, 'update-cmd.json');
-  fs.writeFileSync(tmp, JSON.stringify({ method, stagingDir, targetVersion, changelog }, null, 2), 'utf8');
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(tmp, JSON.stringify({
+    method: m,
+    force: !!force,
+    targetVersion,
+    changelog,
+    requestedBy,
+    requestedAt: new Date().toISOString()
+  }, null, 2), 'utf8');
   const script = path.join(PROJECT_ROOT, 'server', 'scripts', 'updater-run.mjs');
   const child = spawn(process.execPath, [script, '--cmd=' + tmp], {
     detached: true,
@@ -312,8 +52,9 @@ export function runUpdater({ method, stagingDir, targetVersion, changelog }) {
     env: { ...process.env, UPDATE_PM2_NAME: pm2, PORT: getEnv('PORT', '8787') }
   });
   child.unref();
-  logger.info(`已触发独立更新进程 pid=${child.pid} method=${method} version=${targetVersion}`);
-  return { started: true, pid: child.pid || 0, busy: false };
+  logger.info(`已触发独立更新进程 pid=${child.pid} method=${m} force=${!!force}`);
+  appendRunLog(`[主进程] 触发独立更新进程 pid=${child.pid} method=${m} force=${!!force}`);
+  return { started: true, pid: child.pid || 0, busy: false, method: m };
 }
 
 // ---------- 定时调度器 ----------
@@ -325,23 +66,20 @@ export function startUpdateScheduler() {
     const cfg = updateConfig();
     if (cfg.autoMode === 'off') return;
     try {
+      const { checkUpstream } = await import('./updaterCore.js');
       const state = await checkUpstream();
       if (!state.ok || !state.hasUpdate) return;
       if (cfg.autoMode === 'notify') return; // 仅更新 state，前端提醒
       if (cfg.autoMode === 'download') {
-        // 完整更新：下载并解压到暂存，不应用（待手动确认）
+        // 预下载完整包到暂存（不应用，待手动确认）；实际执行更新时会按需重新下载
         await prepareFullStaging();
+        writeProgress('idle', 100, '自动预下载完成（待手动确认应用）', true);
         logger.info('[update] 自动下载完成（完整包），待确认应用');
         return;
       }
-      // auto = 直接完成更新（统一完整包替换）；等待运行任务结束
+      // auto = 直接完成更新（按配置的更新模式执行）
       await waitIdle();
-      const stagingDir = await prepareFullStaging();
-      const fv = path.join(stagingDir, '.release', '.version');
-      const fc = path.join(stagingDir, '.release', '.version.update');
-      let tgt = null; try { tgt = fs.readFileSync(fv, 'utf8').trim(); } catch {}
-      let chg = ''; try { chg = fs.readFileSync(fc, 'utf8'); } catch {}
-      const res = runUpdater({ method: 'full', stagingDir, targetVersion: tgt, changelog: chg });
+      const res = runUpdater({ method: cfg.method, force: true, requestedBy: 'scheduler' });
       logger.info('[update] 自动更新已触发', res);
     } catch (e) {
       logger.error(`[update] 自动检测失败: ${e.message}`);

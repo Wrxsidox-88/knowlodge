@@ -1,14 +1,12 @@
 import { Router } from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
-import { execFile } from 'node:child_process';
 import { setEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { db, verifyPassword } from '../db.js';
 import {
   updateConfig, localVersion, localChangelog, checkUpstream, lastCheck, lastResult, readRunLog,
-  diffPlan, prepareIncremental, runUpdater, runningTasks, parseRepo, DATA_DIR, PROJECT_ROOT,
-  readProgress, clearProgress, writeProgress
+  diffPlan, runningTasks, readProgress, clearProgress, resetRunLog, runUpdater, PROJECT_ROOT
 } from '../services/updater.js';
 
 export const updateRouter = Router();
@@ -70,6 +68,9 @@ updateRouter.post('/settings', (req, res) => {
   for (const [k, env] of Object.entries(KEY_TO_ENV)) {
     if (k in v && k !== 'password') updates[env] = String(v[k] ?? '').trim();
   }
+  if (updates.UPDATE_METHOD && !['incremental', 'full'].includes(updates.UPDATE_METHOD)) {
+    return res.status(400).json({ error: '更新模式无效（可选 incremental / full）' });
+  }
   if (!Object.keys(updates).length) return res.status(400).json({ error: '没有可保存的设置' });
   try {
     setEnv(updates);
@@ -87,6 +88,7 @@ updateRouter.post('/check', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// 差异对比预览（增量更新将执行的 新增/修改/删除 文件清单）
 updateRouter.get('/diff', async (req, res, next) => {
   try {
     const plan = await diffPlan();
@@ -104,93 +106,35 @@ updateRouter.get('/readme', (req, res) => {
   }
 });
 
-// 详细更新日志（含命令输出，仅与更新有关）
+// 详细更新日志（更新模块的完整运行输出）
 updateRouter.get('/log', (req, res) => {
   res.json({ ok: true, content: readRunLog() });
 });
 
-// 下载仓库 tarball 并解压，返回 full 暂存根目录（下载过程实时写进度：已下载/总量/速度）
-async function prepareFull(staging) {
-  const cfg = updateConfig();
-  const { owner, repo } = parseRepo(cfg.repo);
-  const branch = cfg.branch || 'HEAD';
-  const tgz = path.join(staging, 'repo.tgz');
-  const url = `https://codeload.github.com/${owner}/${repo}/tar.gz/${branch}`;
-  let total = 0;
-  try {
-    const hd = await execFileAsync('curl', ['-fsSL', '-I', '-L', url], { timeout: 15000 });
-    const m = /content-length:\s*(\d+)/i.exec(hd);
-    if (m) total = Number(m[1]);
-  } catch { /* 大小未知 → 前端显示不确定进度 */ }
-  writeProgress('download', 3, '正在获取完整包大小…');
-  await downloadWithProgress(url, tgz, total);
-  writeProgress('unpack', 40, '正在解压完整包…');
-  await execFileAsync('tar', ['-xzf', tgz, '-C', staging]);
-  const entries = fs.readdirSync(staging).filter((n) => n !== 'repo.tgz');
-  writeProgress('unpack', 45, '解压完成');
-  return path.join(staging, entries[0]);
-}
-
-// curl 流式下载并轮询文件大小，写入下载进度与实时速度
-function downloadWithProgress(url, outFile, total) {
-  return new Promise((resolve, reject) => {
-    const child = execFile('curl', ['-fsSL', '-L', url, '-o', outFile], { timeout: 180000 });
-    let last = 0;
-    const iv = setInterval(() => {
-      let done = 0;
-      try { done = fs.statSync(outFile).size; } catch {}
-      const speed = (done - last) / 0.5;             // bytes/s
-      last = done;
-      const pct = total > 0 ? Math.min(99, Math.round(3 + 37 * (done / total))) : null;
-      const mb = (done / 1048576).toFixed(1);
-      const tot = total > 0 ? (total / 1048576).toFixed(1) : '?';
-      const sp = speed > 0 ? (speed / 1048576).toFixed(2) : '0';
-      writeProgress('download', pct, `正在下载完整包 ${mb} MB / ${tot} MB（${sp} MB/s）`);
-    }, 500);
-    child.on('close', (code) => {
-      clearInterval(iv);
-      if (code === 0) resolve();
-      else reject(new Error('下载失败（curl exit=' + code + '）'));
-    });
-  });
-}
-
-function execFileAsync(cmd, args, opts) {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { ...opts, maxBuffer: 50 * 1024 * 1024 }, (err, so) => (err ? reject(err) : resolve(so)));
-  });
-}
-
+// 执行更新：验证后立即交由独立更新模块接管（下载→备份→替换→依赖→构建→重启→自检→回滚），
+// 本接口即时返回，不阻塞等待下载；前端通过 /status 的 progress 轮询实时进度。
 updateRouter.post('/apply', async (req, res, next) => {
   try {
-    const { password, method, targetVersion, changelog, force } = req.body || {};
+    const { password, method, force, targetVersion, changelog } = req.body || {};
     const tasks = runningTasks();
     if (tasks > 0) {
       return res.status(409).json({ error: '当前有运行中的任务，请等待其结束或失败后再更新', busy: tasks });
     }
-    // 增量/全量均需密码验证（auto 直更由主进程调度并且无需人工交互，本端点仅用于手动确认）
     if (!requirePassword(req.user, password)) {
       return res.status(403).json({ error: '密码验证失败，无法执行更新' });
     }
-    clearProgress(); // 下载/解压/替换全程写进度
-    // 统一使用完整更新：不做任何一致性/差异检查，直接以完整包替换覆盖本地（增量模式已移除）
-    const m = 'full';
-    let tgt = targetVersion || null;
-    let chg = changelog || '';
-    const staging = path.join(DATA_DIR, 'update-staging', 'full-' + Date.now());
-    fs.mkdirSync(staging, { recursive: true });
-    const stagingDir = await prepareFull(staging);
-    const fv = path.join(stagingDir, '.release', '.version');
-    const fc = path.join(stagingDir, '.release', '.version.update');
-    if (!tgt && fs.existsSync(fv)) tgt = fs.readFileSync(fv, 'utf8').trim();
-    if (!chg && fs.existsSync(fc)) chg = fs.readFileSync(fc, 'utf8');
-    const started = runUpdater({ method: m, stagingDir, targetVersion: tgt, changelog: chg });
+    const m = method === 'full' ? 'full' : 'incremental';
+    const lc = lastCheck();
+    const tgt = targetVersion || lc?.remoteVersion || null;
+    const chg = changelog || lc?.changelog || '';
+
+    resetRunLog();
+    clearProgress(); // 下载/备份/替换/构建/重启/自检全程由更新模块写进度
+    const started = runUpdater({ method: m, force: !!force, targetVersion: tgt, changelog: chg, requestedBy: req.user?.username || '' });
     if (!started.started) return res.status(409).json({ error: '更新启动失败', busy: started.tasks });
-    res.json({ ok: true, started: true, method: m, version: tgt, pid: started.pid, stagingDir });
+    logger.info(`更新已触发 method=${m} force=${!!force} version=${tgt || '(以仓库为准)'} user=${req.user?.username}`);
+    res.json({ ok: true, started: true, method: m, version: tgt, pid: started.pid });
   } catch (e) {
     next(e);
   }
 });
-
-
-
