@@ -2530,3 +2530,12 @@ input[type='radio'] {
 .diff-action.modify { background: rgba(0,90,158,.12); color: var(--accent-base, #0078d4); }
 .diff-action.delete { background: rgba(196,43,28,.12); color: #c42b1c; }
 .diff-path { word-break: break-all; color: var(--text-primary, #1f1f1f); font-family: monospace; }
+
+/* 目标成绩（设置页） */
+.targets-head { font-size: 12px; margin-bottom: 6px; }
+.targets-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.targets-row .field { margin-bottom: 8px; width: 150px; }
+.targets-row .field input { width: 100%; }
+.targets-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+.targets-subject { border: 1px solid rgba(128,128,128,.15); border-radius: 8px; padding: 10px 12px; }
+.targets-subject-name { font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--text-primary, #1f1f1f); }

@@ -39,7 +39,26 @@
         <div v-else ref="weakEl" :style="{ height: weakHeight + 'px' }"></div>
       </div>
       <div class="card">
-        <h3>成绩波动趋势（得分率 %）</h3>
+        <div class="toolbar" style="margin-bottom: 4px">
+          <h3 style="margin: 0">成绩波动趋势（得分率 %）</h3>
+          <WinComboBox
+            :ItemsSource="windowOptions"
+            DisplayMemberPath="label"
+            SelectedValuePath="value"
+            v-model:SelectedValue="trendWindow"
+            @SelectionChanged="load"
+            Width="140" />
+          <WinComboBox
+            :ItemsSource="trendMetricOptions"
+            DisplayMemberPath="label"
+            SelectedValuePath="value"
+            v-model:SelectedValue="trendMetric"
+            @SelectionChanged="renderTrend"
+            Width="130" />
+        </div>
+        <div class="muted" style="font-size: 12px; margin-bottom: 6px">
+          目标线（虚线）取自设置页「目标成绩」；近期平均线（点线）取筛选窗口内各科平均值。
+        </div>
         <div v-if="!data.trend?.length" class="empty">登记考试后显示</div>
         <div v-else ref="trendEl" style="height: 320px"></div>
       </div>
@@ -101,18 +120,44 @@ const radarEl = ref(null);
 const causeEl = ref(null);
 const weakEl = ref(null);
 const trendEl = ref(null);
+const trendWindow = ref('');
+const trendMetric = ref('pct');
 const charts = [];
 const subjectOptions = computed(() => [
   { label: '全部科目', value: '' },
   ...((data.value.subjects) || []).map((s) => ({ label: s, value: s }))
 ]);
 
+const windowOptions = [
+  { label: '全部时间', value: '' },
+  { label: '近 30 天', value: '30d' },
+  { label: '近 90 天', value: '90d' },
+  { label: '近 180 天', value: '180d' },
+  { label: '近一年', value: '365d' }
+];
+const trendMetricOptions = [
+  { label: '得分率 %', value: 'pct' },
+  { label: '年级排名', value: 'grade' },
+  { label: '班级排名', value: 'class' }
+];
+
 const radarHasData = computed(() => (data.value.radar?.indicators?.length || 0) > 0);
 const weakHeight = computed(() => Math.max(220, (data.value.weakNodes?.length || 0) * 34 + 60));
 
+function windowDateRange(window) {
+  if (!window) return { dateFrom: null, dateTo: null };
+  const days = Number(window.replace('d', ''));
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - days);
+  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { dateFrom: fmt(from), dateTo: fmt(to) };
+}
+
 async function load() {
   try {
-    data.value = await api.studyOverview(subject.value || undefined);
+    const { dateFrom, dateTo } = windowDateRange(trendWindow.value);
+    data.value = await api.studyOverview(subject.value || undefined, { dateFrom: dateFrom || undefined, dateTo: dateTo || undefined });
     await nextTick();
     renderAll();
   } catch (e) {
@@ -225,6 +270,12 @@ function renderWeak() {
   );
 }
 
+function trendValue(t) {
+  if (trendMetric.value === 'grade') return t.grade_rank ?? null;
+  if (trendMetric.value === 'class') return t.class_rank ?? null;
+  return t.pct;
+}
+
 function renderTrend() {
   if (!data.value.trend?.length) return;
   const CP = chartPalette();
@@ -234,23 +285,95 @@ function renderTrend() {
     if (!bySubject.has(t.subject)) bySubject.set(t.subject, []);
     bySubject.get(t.subject).push(t);
   }
+  const isRank = trendMetric.value === 'grade' || trendMetric.value === 'class';
+  const xDates = [...new Set(data.value.trend.map((t) => t.exam_date))].sort();
+  const series = [...bySubject.entries()].map(([s, list], i) => ({
+    name: s,
+    type: 'line',
+    smooth: true,
+    symbolSize: 8,
+    connectNulls: false,
+    lineStyle: { width: 3, color: CHART_COLORS[i % CHART_COLORS.length] },
+    itemStyle: { color: CHART_COLORS[i % CHART_COLORS.length] },
+    data: list.map((t) => [t.exam_date, trendValue(t)])
+  }));
+
+  // 近期平均线：筛选窗口内各科平均值（按当前指标），作为虚线
+  const avgSeries = [];
+  for (const [s, list] of bySubject.entries()) {
+    const vals = list.map(trendValue).filter((v) => v != null);
+    if (!vals.length) continue;
+    const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+    avgSeries.push({
+      name: `${s} 近期平均`,
+      type: 'line',
+      smooth: false,
+      symbol: 'none',
+      lineStyle: { width: 1.5, type: 'dotted', color: CHART_COLORS[[...bySubject.keys()].indexOf(s) % CHART_COLORS.length] },
+      itemStyle: { color: CHART_COLORS[[...bySubject.keys()].indexOf(s) % CHART_COLORS.length] },
+      data: xDates.map((d) => [d, Math.round(avg * 10) / 10]),
+      tooltip: { show: false }
+    });
+  }
+  series.push(...avgSeries);
+
+  // 目标线：设置页「目标成绩」（得分率按目标分数/满分换算；排名取目标排名）
+  const targetSeries = [];
+  const targets = data.value.targets || {};
+  const addTargetLine = (name, val) => {
+    if (val == null || val === '') return;
+    targetSeries.push({
+      name,
+      type: 'line',
+      smooth: false,
+      symbol: 'none',
+      lineStyle: { width: 2, type: 'dashed', color: '#ffd24a' },
+      itemStyle: { color: '#ffd24a' },
+      data: xDates.map((d) => [d, val]),
+      tooltip: { show: false },
+      z: 5
+    });
+  };
+  if (!isRank) {
+    // 得分率视图：每科目标（若该科在图中出现）→ 目标得分率；否则总分目标得分率
+    for (const s of bySubject.keys()) {
+      const sub = targets.subjects?.[s];
+      if (sub && sub.score != null && sub.total != null && sub.total > 0) {
+        addTargetLine(`${s} 目标`, Math.round((sub.score / sub.total) * 1000) / 10);
+      }
+    }
+    const t = targets.total;
+    if (t && t.score != null && t.total != null && t.total > 0) {
+      addTargetLine('总分目标', Math.round((t.score / t.total) * 1000) / 10);
+    }
+  } else if (trendMetric.value === 'grade') {
+    for (const s of bySubject.keys()) {
+      const sub = targets.subjects?.[s];
+      if (sub && sub.gradeRank != null) addTargetLine(`${s} 目标排名`, sub.gradeRank);
+    }
+    if (targets.total?.gradeRank != null) addTargetLine('总分目标排名', targets.total.gradeRank);
+  } else {
+    for (const s of bySubject.keys()) {
+      const sub = targets.subjects?.[s];
+      if (sub && sub.classRank != null) addTargetLine(`${s} 目标排名`, sub.classRank);
+    }
+    if (targets.total?.classRank != null) addTargetLine('总分目标排名', targets.total.classRank);
+  }
+  series.push(...targetSeries);
+
+  const yAxis = isRank
+    ? { type: 'value', inverse: true, minInterval: 1, axisLabel: { color: CP.axisLabel }, splitLine: AXIS_STYLE.splitLine }
+    : { type: 'value', max: 100, axisLabel: { formatter: '{value}%', color: CP.axisLabel }, splitLine: AXIS_STYLE.splitLine };
+  const tooltipFmt = isRank ? (v) => `第 ${v} 名` : (v) => `${v}%`;
   c.setOption(
     {
       backgroundColor: 'transparent',
-      tooltip: { trigger: 'axis', valueFormatter: (v) => `${v}%` },
-      legend: { textStyle: { color: CP.axisLabel }, top: 0 },
+      tooltip: { trigger: 'axis', valueFormatter: tooltipFmt },
+      legend: { textStyle: { color: CP.axisLabel }, top: 0, type: 'scroll' },
       grid: { left: 44, right: 16, top: 34, bottom: 26 },
       xAxis: { type: 'category', ...AXIS_STYLE },
-      yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%', color: CP.axisLabel }, splitLine: AXIS_STYLE.splitLine },
-      series: [...bySubject.entries()].map(([s, list], i) => ({
-        name: s,
-        type: 'line',
-        smooth: true,
-        symbolSize: 8,
-        lineStyle: { width: 3, color: CHART_COLORS[i % CHART_COLORS.length] },
-        itemStyle: { color: CHART_COLORS[i % CHART_COLORS.length] },
-        data: list.map((t) => [t.exam_date, t.pct])
-      }))
+      yAxis,
+      series
     },
     true
   );

@@ -174,6 +174,11 @@ export const api = {
   usagemeterGrant: (value, unit) => http.post('/usagemeter/grant', { value, unit }),
   usagemeterReset: () => http.post('/usagemeter/reset'),  testAI: () => http.post('/settings/ai/test'),
 
+  // 目标成绩（设置页）：总分目标 + 每科目标（分数/排名），AI 建议
+  getTargets: () => http.get('/settings/targets'),
+  saveTargets: (data) => http.put('/settings/targets', data),
+  suggestTargets: () => http.post('/settings/targets/suggest'),
+
   getUpdateStatus: () => http.get('/update/status'),
   checkUpdate: () => http.post('/update/check'),
   getUpdateDiff: () => http.get('/update/diff'),
@@ -185,7 +190,7 @@ export const api = {
   monitor: () => http.get('/monitor'),
 
   listExams: (params) => http.get('/exams', { params }),
-  examTrend: (subject) => http.get('/exams/trend', { params: subject ? { subject } : {} }),
+  examTrend: (subject, params = {}) => http.get('/exams/trend', { params: { ...(subject ? { subject } : {}), ...params } }),
   createExam: (data) => http.post('/exams', data),
   updateExam: (id, data) => http.put(`/exams/${id}`, data),
   deleteExam: (id) => http.delete(`/exams/${id}`),
@@ -204,7 +209,7 @@ export const api = {
   updateCause: (id, data) => http.put(`/wrong/causes/${id}`, data),
   deleteCause: (id) => http.delete(`/wrong/causes/${id}`),
 
-  studyOverview: (subject) => http.get('/study/overview', { params: subject ? { subject } : {} }),
+  studyOverview: (subject, params = {}) => http.get('/study/overview', { params: { ...(subject ? { subject } : {}), ...params } }),
   completeReview: (nodeId) => http.post(`/study/reviews/${nodeId}/complete`),
   generatePractice: (nodeId) => http.post('/study/practice/generate', nodeId ? { nodeId } : {}),
   listPractices: () => http.get('/study/practices'),

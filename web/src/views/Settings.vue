@@ -322,6 +322,57 @@
       </ul>
     </WinExpander>
 
+    <!-- 目标成绩（分数/排名，每科与总分，支持 AI 建议） -->
+    <WinExpander
+      class="settings-expander"
+      Header="目标成绩"
+      Description="设定每科与总分的目标分数和目标排名，AI 可根据最近考试情况给建议；学情分析与成绩趋势图中将绘制目标线与近期平均线"
+      HeaderIcon="&#xE9D9;">
+      <div v-if="targetsError" class="error-box">{{ targetsError }}</div>
+      <div class="toolbar" style="margin: 0">
+        <button class="primary" :disabled="targetsSaving" @click="saveTargets">
+          <span v-if="targetsSaving" class="loading"></span>保存目标
+        </button>
+        <button :disabled="targetsSuggesting" @click="aiSuggestTargets">
+          <span v-if="targetsSuggesting" class="loading"></span>AI 根据最近情况给建议
+        </button>
+        <span v-if="targetsMsg" class="muted" :class="targetsErrFlag ? 'danger' : 'done'" style="font-size: 12px">{{ targetsMsg }}</span>
+      </div>
+      <div class="muted" style="font-size: 12px; margin-top: 6px">
+        目标分数将换算为得分率在学情分析中绘制目标线；目标排名（数值越小越好）绘制在排名趋势图中。
+      </div>
+
+      <div style="margin-top: 12px">
+        <div class="targets-head muted">总分目标</div>
+        <div class="targets-row">
+          <label class="field"><span>目标总分</span><input type="number" min="0" v-model="targetsForm.total.score" placeholder="如 620" /></label>
+          <label class="field"><span>总分满分</span><input type="number" min="0" v-model="targetsForm.total.total" placeholder="如 750" /></label>
+          <label class="field"><span>目标年级排名</span><input type="number" min="1" v-model="targetsForm.total.gradeRank" placeholder="如 80" /></label>
+          <label class="field"><span>目标班级排名</span><input type="number" min="1" v-model="targetsForm.total.classRank" placeholder="如 15" /></label>
+        </div>
+      </div>
+
+      <div style="margin-top: 14px">
+        <div class="targets-head muted">各科目标</div>
+        <div class="targets-grid">
+          <div v-for="sub in targetSubjects" :key="sub" class="targets-subject">
+            <div class="targets-subject-name">{{ sub }}</div>
+            <div class="targets-row">
+              <label class="field"><span>目标分数</span><input type="number" min="0" v-model="targetsForm.subjects[sub].score" placeholder="如 120" /></label>
+              <label class="field"><span>满分</span><input type="number" min="0" v-model="targetsForm.subjects[sub].total" placeholder="如 150" /></label>
+              <label class="field"><span>目标年级排名</span><input type="number" min="1" v-model="targetsForm.subjects[sub].gradeRank" placeholder="如 100" /></label>
+              <label class="field"><span>目标班级排名</span><input type="number" min="1" v-model="targetsForm.subjects[sub].classRank" placeholder="如 10" /></label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="targetsSuggestNote" class="node-card" style="margin-top: 12px">
+        <div class="muted" style="margin-bottom: 6px">{{ targetsSuggestNote }}</div>
+        <div v-if="targetsSuggestText" class="md-body" v-html="md(targetsSuggestText)"></div>
+      </div>
+    </WinExpander>
+
     <!-- 版本与更新（Windows 更新风格） -->
     <WinExpander
       class="settings-expander"
@@ -1855,11 +1906,131 @@ async function openUpdReadme() {
   }
 }
 
+// ---- 目标成绩（分数/排名，每科与总分，AI 建议）----
+const TARGET_SUBJECTS = ['语文', '数学', '英语', '物理', '化学', '生物', '历史', '地理', '政治'];
+const targetSubjects = TARGET_SUBJECTS;
+const targetsForm = reactive({
+  total: { score: '', total: '', gradeRank: '', classRank: '' },
+  subjects: {}
+});
+for (const s of TARGET_SUBJECTS) targetsForm.subjects[s] = { score: '', total: '', gradeRank: '', classRank: '' };
+const targetsError = ref('');
+const targetsMsg = ref('');
+const targetsErrFlag = ref(false);
+const targetsSaving = ref(false);
+const targetsSuggesting = ref(false);
+const targetsSuggestNote = ref('');
+const targetsSuggestText = ref('');
+
+function assignTargetForm(targets) {
+  targets = targets || {};
+  const t = targets.total || {};
+  targetsForm.total = {
+    score: t.score ?? '',
+    total: t.total ?? '',
+    gradeRank: t.gradeRank ?? '',
+    classRank: t.classRank ?? ''
+  };
+  const subs = targets.subjects || {};
+  for (const s of TARGET_SUBJECTS) {
+    const sub = subs[s] || {};
+    targetsForm.subjects[s] = {
+      score: sub.score ?? '',
+      total: sub.total ?? '',
+      gradeRank: sub.gradeRank ?? '',
+      classRank: sub.classRank ?? ''
+    };
+  }
+}
+
+async function loadTargets() {
+  try {
+    const targets = await api.getTargets();
+    assignTargetForm(targets);
+  } catch (e) {
+    targetsError.value = e.message;
+  }
+}
+
+function buildTargetsPayload() {
+  const clean = (o) => {
+    const out = {};
+    if (o.score !== '' && o.score != null) out.score = Number(o.score);
+    if (o.total !== '' && o.total != null) out.total = Number(o.total);
+    if (o.gradeRank !== '' && o.gradeRank != null) out.gradeRank = Number(o.gradeRank);
+    if (o.classRank !== '' && o.classRank != null) out.classRank = Number(o.classRank);
+    return out;
+  };
+  const subjects = {};
+  for (const s of TARGET_SUBJECTS) {
+    const sub = clean(targetsForm.subjects[s]);
+    if (Object.keys(sub).length) subjects[s] = sub;
+  }
+  return { enabled: true, total: clean(targetsForm.total), subjects };
+}
+
+async function saveTargets() {
+  targetsSaving.value = true;
+  targetsError.value = '';
+  targetsMsg.value = '';
+  targetsErrFlag.value = false;
+  try {
+    const targets = await api.saveTargets(buildTargetsPayload());
+    assignTargetForm(targets.targets);
+    targetsMsg.value = '目标成绩已保存';
+  } catch (e) {
+    targetsErrFlag.value = true;
+    targetsMsg.value = e.message;
+  } finally {
+    targetsSaving.value = false;
+  }
+}
+
+async function aiSuggestTargets() {
+  targetsSuggesting.value = true;
+  targetsMsg.value = '';
+  targetsErrFlag.value = false;
+  targetsSuggestNote.value = '';
+  targetsSuggestText.value = '';
+  try {
+    const r = await api.suggestTargets();
+    targetsSuggestNote.value = r.note || '';
+    if (r.suggestion) {
+      targetsSuggestText.value = r.suggestion.text || '';
+      if (r.suggestion.total) {
+        if (r.suggestion.total.score != null) targetsForm.total.score = r.suggestion.total.score;
+        if (r.suggestion.total.total != null) targetsForm.total.total = r.suggestion.total.total;
+        if (r.suggestion.total.gradeRank != null) targetsForm.total.gradeRank = r.suggestion.total.gradeRank;
+        if (r.suggestion.total.classRank != null) targetsForm.total.classRank = r.suggestion.total.classRank;
+      }
+      const subs = r.suggestion.subjects || {};
+      for (const s of TARGET_SUBJECTS) {
+        const sub = subs[s];
+        if (!sub) continue;
+        if (sub.score != null) targetsForm.subjects[s].score = sub.score;
+        if (sub.total != null) targetsForm.subjects[s].total = sub.total;
+        if (sub.gradeRank != null) targetsForm.subjects[s].gradeRank = sub.gradeRank;
+        if (sub.classRank != null) targetsForm.subjects[s].classRank = sub.classRank;
+      }
+      targetsMsg.value = 'AI 建议已填入，可修改后保存';
+    } else if (r.note) {
+      targetsErrFlag.value = true;
+      targetsMsg.value = r.note;
+    }
+  } catch (e) {
+    targetsErrFlag.value = true;
+    targetsMsg.value = e.message;
+  } finally {
+    targetsSuggesting.value = false;
+  }
+}
+
 onMounted(() => {
   loadAccount();
   loadSysInfo();
   loadDev();
   refreshUpdateStatus();
+  loadTargets();
   Promise.all([load(), loadPm2()])
     .catch(() => {})
     .finally(() => {

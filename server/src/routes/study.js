@@ -11,7 +11,11 @@ import { listCauseTags } from '../services/causeTags.js';
 export const studyRouter = Router();
 
 studyRouter.get('/overview', (req, res) => {
-  res.json(overview({ subject: req.query.subject || null }));
+  res.json(overview({
+    subject: req.query.subject || null,
+    dateFrom: req.query.dateFrom || null,
+    dateTo: req.query.dateTo || null
+  }));
 });
 
 studyRouter.get('/causes', (req, res) => {

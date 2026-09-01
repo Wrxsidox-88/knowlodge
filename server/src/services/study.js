@@ -1,6 +1,7 @@
 import { db } from '../db.js';
 import { logger } from '../logger.js';
 import { aiEnabled, chat } from '../ai/client.js';
+import { getTargets } from './targets.js';
 
 export const ERROR_CAUSES = ['知识盲区', '逻辑错误', '概念混淆', '粗心', '方法错误', '其他'];
 export const EBBINGHAUS_INTERVALS = [1, 2, 4, 7, 15, 30];
@@ -72,7 +73,7 @@ function weakNodes({ subject = null, limit = 15 } = {}) {
   return list.slice(0, limit);
 }
 
-export function overview({ subject = null } = {}) {
+export function overview({ subject = null, dateFrom = null, dateTo = null } = {}) {
   const subjects = db.prepare(
     "SELECT DISTINCT subject FROM knowledge_nodes WHERE subject IS NOT NULL AND subject != '' ORDER BY subject"
   ).all().map((r) => r.subject);
@@ -102,9 +103,22 @@ export function overview({ subject = null } = {}) {
     `SELECT ifnull(error_cause, '未标注') AS cause, COUNT(*) AS count FROM wrong_questions GROUP BY cause ORDER BY count DESC`
   ).all();
 
+  // 成绩趋势：支持时间窗口筛选（dateFrom/dateTo，含两端）
+  const trendWhere = [];
+  const trendArgs = [];
+  if (dateFrom) {
+    trendWhere.push('exam_date >= ?');
+    trendArgs.push(dateFrom);
+  }
+  if (dateTo) {
+    trendWhere.push('exam_date <= ?');
+    trendArgs.push(dateTo);
+  }
   const trend = db.prepare(
-    'SELECT id, subject, title, exam_date, total_score, score FROM exams ORDER BY exam_date ASC, id ASC LIMIT 200'
-  ).all();
+    `SELECT id, subject, title, exam_date, total_score, score, grade_rank, class_rank FROM exams
+     ${trendWhere.length ? 'WHERE ' + trendWhere.join(' AND ') : ''}
+     ORDER BY exam_date ASC, id ASC LIMIT 500`
+  ).all(...trendArgs);
 
   const wrongTotal = db.prepare('SELECT COUNT(*) AS c FROM wrong_questions').get().c;
   const practiceRows = db.prepare('SELECT COUNT(*) AS total, ifnull(SUM(is_correct = 1), 0) AS correct FROM practices WHERE status != \'open\'').get();
@@ -116,6 +130,7 @@ export function overview({ subject = null } = {}) {
     subjectAverages,
     causeDistribution: causeRows,
     trend: trend.map((t) => ({ ...t, pct: t.total_score ? Math.round((t.score / t.total_score) * 1000) / 10 : 0 })),
+    targets: getTargets(),
     reviewDue: dueReviews(20).map((r) => ({ ...r, mastery: masteryScore(r) })),
     reviewDueCount: db.prepare(
       "SELECT COUNT(*) AS c FROM mastery WHERE wrong > 0 AND next_review_at IS NOT NULL AND date(next_review_at) <= date('now')"

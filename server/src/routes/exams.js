@@ -19,10 +19,23 @@ examsRouter.get('/', (req, res) => {
 });
 
 examsRouter.get('/trend', (req, res) => {
-  const { subject } = req.query;
-  const rows = subject
-    ? db.prepare('SELECT * FROM exams WHERE subject = ? ORDER BY exam_date ASC, id ASC').all(subject)
-    : db.prepare('SELECT * FROM exams ORDER BY exam_date ASC, id ASC').all();
+  const { subject, dateFrom, dateTo } = req.query;
+  const where = [];
+  const args = [];
+  if (subject) {
+    where.push('subject = ?');
+    args.push(subject);
+  }
+  if (dateFrom) {
+    where.push('exam_date >= ?');
+    args.push(dateFrom);
+  }
+  if (dateTo) {
+    where.push('exam_date <= ?');
+    args.push(dateTo);
+  }
+  const sql = `SELECT * FROM exams ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY exam_date ASC, id ASC`;
+  const rows = db.prepare(sql).all(...args);
   res.json({
     items: rows.map((r) => ({
       ...r,
@@ -134,12 +147,17 @@ function findOrCreateEvent(title, date) {
 }
 
 examsRouter.post('/', (req, res) => {
-  const { subject, title, examDate, totalScore, score, note, examEventId, examEventTitle } = req.body || {};
+  const { subject, title, examDate, totalScore, score, note, gradeRank, classRank, examEventId, examEventTitle } = req.body || {};
   if (!subject?.trim() || !examDate || totalScore == null || score == null) {
     return res.status(400).json({ error: '科目、日期、满分、得分不能为空' });
   }
   if (Number(score) > Number(totalScore)) {
     return res.status(400).json({ error: '得分不能大于满分' });
+  }
+  const gr = gradeRank != null && gradeRank !== '' ? Number(gradeRank) : null;
+  const cr = classRank != null && classRank !== '' ? Number(classRank) : null;
+  if ((gr != null && (!Number.isFinite(gr) || gr <= 0)) || (cr != null && (!Number.isFinite(cr) || cr <= 0))) {
+    return res.status(400).json({ error: '排名须为正整数' });
   }
   const dup = db.prepare(
     'SELECT id FROM exams WHERE subject = ? AND exam_date = ? AND total_score = ? AND score = ? AND ifnull(title, \'\') = ?'
@@ -152,8 +170,8 @@ examsRouter.post('/', (req, res) => {
     eventId = findOrCreateEvent(examEventTitle, examDate)?.id ?? null;
   }
   const info = db.prepare(
-    'INSERT INTO exams (subject, title, exam_date, total_score, score, note, exam_event_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(subject.trim(), title?.trim() || null, examDate, Number(totalScore), Number(score), note || null, eventId);
+    'INSERT INTO exams (subject, title, exam_date, total_score, score, grade_rank, class_rank, note, exam_event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(subject.trim(), title?.trim() || null, examDate, Number(totalScore), Number(score), gr, cr, note || null, eventId);
   const id = Number(info.lastInsertRowid);
   logger.info(`考试记录入库: #${id} ${subject} ${score}/${totalScore}${eventId ? `（事件#${eventId}）` : ''}`, { user: req.user.username });
   res.status(201).json({ id, eventId });
@@ -163,20 +181,29 @@ examsRouter.put('/:id', (req, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT * FROM exams WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: '考试记录不存在' });
-  const { subject, title, examDate, totalScore, score, note, examEventId, examEventTitle } = req.body || {};
+  const { subject, title, examDate, totalScore, score, note, gradeRank, classRank, examEventId, examEventTitle } = req.body || {};
   let eventId = row.exam_event_id;
   if (examEventId !== undefined) eventId = examEventId ? Number(examEventId) : null;
   if (!eventId && examEventTitle?.trim()) {
     eventId = findOrCreateEvent(examEventTitle, examDate || row.exam_date)?.id ?? null;
   }
+  let gr = row.grade_rank;
+  if (gradeRank !== undefined) gr = gradeRank !== '' && gradeRank != null ? Number(gradeRank) : null;
+  let cr = row.class_rank;
+  if (classRank !== undefined) cr = classRank !== '' && classRank != null ? Number(classRank) : null;
+  if ((gr != null && (!Number.isFinite(gr) || gr <= 0)) || (cr != null && (!Number.isFinite(cr) || cr <= 0))) {
+    return res.status(400).json({ error: '排名须为正整数' });
+  }
   db.prepare(
-    `UPDATE exams SET subject = ?, title = ?, exam_date = ?, total_score = ?, score = ?, note = ?, exam_event_id = ?, updated_at = datetime('now') WHERE id = ?`
+    `UPDATE exams SET subject = ?, title = ?, exam_date = ?, total_score = ?, score = ?, grade_rank = ?, class_rank = ?, note = ?, exam_event_id = ?, updated_at = datetime('now') WHERE id = ?`
   ).run(
     subject?.trim() || row.subject,
     title !== undefined ? title?.trim() || null : row.title,
     examDate || row.exam_date,
     totalScore != null ? Number(totalScore) : row.total_score,
     score != null ? Number(score) : row.score,
+    gr,
+    cr,
     note !== undefined ? note || null : row.note,
     eventId,
     id

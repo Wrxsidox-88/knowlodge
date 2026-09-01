@@ -5,6 +5,7 @@ import { getAIConfig, aiEnabled, visionEnabled, autoAnalyzeEnabled, listsAiAutoc
 import { indexSize } from '../services/vectorStore.js';
 import { meterEnabled, meterConfig } from '../services/meter.js';
 import { updateConfig } from '../services/updater.js';
+import { getTargets, saveTargets, suggestTargets } from '../services/targets.js';
 
 export const settingsRouter = Router();
 
@@ -122,6 +123,29 @@ settingsRouter.post('/ai/test', async (req, res, next) => {
     }
     const result = await testAI();
     res.json({ enabled: true, ...result });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ---------- 目标成绩（分数/排名/每科/总分） ----------
+settingsRouter.get('/targets', (req, res) => {
+  res.json(getTargets());
+});
+
+settingsRouter.put('/targets', (req, res) => {
+  try {
+    const saved = saveTargets(req.body || {});
+    res.json({ ok: true, targets: saved });
+  } catch (e) {
+    logger.error(`保存目标成绩失败: ${e.message}`);
+    res.status(500).json({ error: `保存目标成绩失败: ${e.message}` });
+  }
+});
+
+settingsRouter.post('/targets/suggest', async (req, res, next) => {
+  try {
+    res.json(await suggestTargets());
   } catch (e) {
     next(e);
   }

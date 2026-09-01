@@ -157,6 +157,8 @@ CREATE TABLE IF NOT EXISTS exams (
   exam_date TEXT NOT NULL,
   total_score REAL NOT NULL,
   score REAL NOT NULL,
+  grade_rank INTEGER,
+  class_rank INTEGER,
   note TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -331,6 +333,8 @@ function ensureColumn(table, column, definition) {
 }
 
 ensureColumn('exams', 'exam_event_id', 'INTEGER REFERENCES exam_events(id) ON DELETE SET NULL');
+ensureColumn('exams', 'grade_rank', 'INTEGER');
+ensureColumn('exams', 'class_rank', 'INTEGER');
 ensureColumn('analysis_jobs', 'batch_id', 'INTEGER REFERENCES analysis_batches(id) ON DELETE SET NULL');
 db.exec('CREATE INDEX IF NOT EXISTS idx_jobs_batch ON analysis_jobs(batch_id)');
 
