@@ -1114,13 +1114,13 @@ onBeforeUnmount(() => {
 .win-combo-overlay {
   position: fixed;
   inset: 0;
-  z-index: 999;
+  z-index: 10001;
   pointer-events: none;
 }
 
 .win-combo-flyout {
   position: fixed;
-  z-index: 1000;
+  z-index: 10002;
   width: max-content;
   min-width: 80px;
   box-sizing: border-box;

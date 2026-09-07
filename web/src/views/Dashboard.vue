@@ -52,7 +52,7 @@
       <div class="stat"><div class="num"><AnimatedNumber :value="c.nodes" /></div><div class="label">知识点节点</div></div>
       <div class="stat green"><div class="num"><AnimatedNumber :value="c.edges" /></div><div class="label">关系边</div></div>
       <div class="stat green"><div class="num"><AnimatedNumber :value="c.subGraphs" /></div><div class="label">子知识网</div></div>
-      <div class="stat orange"><div class="num"><AnimatedNumber :value="study.reviewDueCount ?? 0" /></div><div class="label">待复习（记忆调度）</div></div>
+      <div class="stat orange"><div class="num"><AnimatedNumber :value="study.reviewDueCount ?? 0" /></div><div class="label">{{ study.weekendMode ? "本周复习计划" : "待复习（记忆调度）" }}</div></div>
       <div class="stat"><div class="num"><AnimatedNumber :value="study.wrongTotal ?? 0" /></div><div class="label">错题总数</div></div>
     </div>
 

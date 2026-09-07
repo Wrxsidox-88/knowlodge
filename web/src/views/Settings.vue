@@ -89,6 +89,30 @@
       </div>
     </WinExpander>
 
+    <!-- 学习模式 -->
+    <WinExpander
+      class="settings-expander"
+      Header="学习模式"
+      Description="按你的实际使用节奏安排复习计划（如只有周末能用电脑）"
+      HeaderIcon="&#xE823;">
+      <div class="settings-toggle-row">
+        <div class="settings-toggle-text">
+          <span class="settings-toggle-title">周末使用模式</span>
+          <span class="settings-toggle-desc">
+            开启后系统按"周末集中使用"规划：工作日不催复习，学情页把截至本周日到期的全部知识点
+            汇总为「本周复习计划」，回家后统一完成；配合错题本的多张照片批量录入，回家一次录入整周错题。
+            复习间隔与记忆稳定性仍按真实复习时间计算，不受此开关影响。
+          </span>
+        </div>
+        <WinToggleSwitch :IsOn="weekendMode" @update:IsOn="weekendMode = $event" />
+      </div>
+      <div class="toolbar" style="margin-top: 10px">
+        <button class="primary" :disabled="saving" @click="save">
+          <span v-if="saving" class="loading"></span>保存设置
+        </button>
+      </div>
+    </WinExpander>
+
     <!-- AI 与模型 -->
     <WinExpander
       class="settings-expander"
@@ -257,55 +281,6 @@
       </div>
     </WinExpander>
 
-    <!-- 关于（Windows 系统信息风格） -->
-    <WinExpander
-      class="settings-expander"
-      Header="关于"
-      Description="系统信息、版本与所使用的开源项目"
-      HeaderIcon="&#xE8A1;"
-      :IsExpanded="true">
-      <div class="about-header">
-        <div class="about-app">
-          <div class="about-app-title">知识图谱智能问答系统</div>
-          <div class="about-app-sub">knowlodge · v{{ sysInfo?.serverVersion || updLocal?.version || '-' }}</div>
-          <div class="about-app-desc">以 AI 为核心的学习平台：材料输入 → 知识图谱构建 → 智能问答 → 学习闭环（考试 / 错题 / 学情 / 练习 / 报告）</div>
-        </div>
-      </div>
-
-      <div class="about-section-title">规格</div>
-      <div class="about-specs">
-        <div class="about-spec"><span>前端</span><span>Vue 3 + Vite + WinUIonWeb（UWP 风格界面）</span></div>
-        <div class="about-spec"><span>后端</span><span>Node.js + Express + SQLite</span></div>
-        <div class="about-spec"><span>AI</span><span>OpenAI 兼容接口（对话 / 向量 / 视觉模型）</span></div>
-        <div class="about-spec"><span>呈现</span><span>ECharts 图表 · KaTeX 公式 · SVG 图形渲染</span></div>
-      </div>
-
-      <div class="about-section-title">开源项目</div>
-      <div class="about-links">
-        <a class="about-link" href="https://github.com/Wrxsidox-88/knowlodge" target="_blank" rel="noopener">
-          <svg class="gh-icon" viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
-            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
-          </svg>
-          <span class="about-link-text">
-            <strong>Wrxsidox-88/knowlodge</strong>
-            <small>知识图谱智能问答系统 · 项目代码仓库</small>
-          </span>
-          <span class="about-link-arrow">&#xE72A;</span>
-        </a>
-        <a class="about-link" href="https://github.com/Furry-Xiyi/WinUIonWeb" target="_blank" rel="noopener">
-          <svg class="gh-icon" viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
-            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
-          </svg>
-          <span class="about-link-text">
-            <strong>Furry-Xiyi/WinUIonWeb</strong>
-            <small>WebUI 使用的 WinUI 开源组件库（已内置）</small>
-          </span>
-          <span class="about-link-arrow">&#xE72A;</span>
-        </a>
-      </div>
-
-      <div class="about-footer">© 2026 Wrxsidox-88 · 基于 WinUIonWeb（Vue 组件库）构建 · 界面图标来自 Segoe MDL2</div>
-    </WinExpander>
 
     <!-- 说明 -->
     <WinExpander
@@ -478,6 +453,56 @@
       </div>
       <div v-if="updErr" class="error-box" style="margin-top: 8px">{{ updMsg }}</div>
       <div v-else-if="updMsg" class="muted" style="margin-top: 8px; font-size: 12px">{{ updMsg }}</div>
+    </WinExpander>
+
+    <!-- 关于（Windows 系统信息风格） -->
+    <WinExpander
+      class="settings-expander"
+      Header="关于"
+      Description="系统信息、版本与所使用的开源项目"
+      HeaderIcon="&#xE8A1;"
+      :IsExpanded="true">
+      <div class="about-header">
+        <div class="about-app">
+          <div class="about-app-title">知识图谱智能问答系统</div>
+          <div class="about-app-sub">knowlodge · v{{ sysInfo?.serverVersion || updLocal?.version || '-' }}</div>
+          <div class="about-app-desc">以 AI 为核心的学习平台：材料输入 → 知识图谱构建 → 智能问答 → 学习闭环（考试 / 错题 / 学情 / 练习 / 报告）</div>
+        </div>
+      </div>
+
+      <div class="about-section-title">规格</div>
+      <div class="about-specs">
+        <div class="about-spec"><span>前端</span><span>Vue 3 + Vite + WinUIonWeb（UWP 风格界面）</span></div>
+        <div class="about-spec"><span>后端</span><span>Node.js + Express + SQLite</span></div>
+        <div class="about-spec"><span>AI</span><span>OpenAI 兼容接口（对话 / 向量 / 视觉模型）</span></div>
+        <div class="about-spec"><span>呈现</span><span>ECharts 图表 · KaTeX 公式 · SVG 图形渲染</span></div>
+      </div>
+
+      <div class="about-section-title">开源项目</div>
+      <div class="about-links">
+        <a class="about-link" href="https://github.com/Wrxsidox-88/knowlodge" target="_blank" rel="noopener">
+          <svg class="gh-icon" viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          <span class="about-link-text">
+            <strong>Wrxsidox-88/knowlodge</strong>
+            <small>知识图谱智能问答系统 · 项目代码仓库</small>
+          </span>
+          <span class="about-link-arrow">&#xE72A;</span>
+        </a>
+        <a class="about-link" href="https://github.com/Furry-Xiyi/WinUIonWeb" target="_blank" rel="noopener">
+          <svg class="gh-icon" viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          <span class="about-link-text">
+            <strong>Furry-Xiyi/WinUIonWeb</strong>
+            <small>WebUI 使用的 WinUI 开源组件库（已内置）</small>
+          </span>
+          <span class="about-link-arrow">&#xE72A;</span>
+        </a>
+      </div>
+
+      <div class="about-footer">© 2026 Wrxsidox-88 · 基于 WinUIonWeb（Vue 组件库）构建 · 界面图标来自 Segoe MDL2</div>
     </WinExpander>
 
     <!-- Token 计量弹窗：趋势 / 总量 / 性能 / 限额 / 趋势窗口 / 临时增加 / 重置 -->
@@ -1031,7 +1056,8 @@ const info = ref(null);
 const form = reactive({
   'ai.baseUrl': '', 'ai.apiKey': '', 'ai.chatModel': '', 'ai.backupModel': '',
   'ai.retryCount': '1', 'ai.embedModel': '', 'ai.visionModel': '',
-  'study.autoAnalyze': 'on', 'lists.aiAutocreate': 'off', 'graph.aiModifySubGraphs': 'on'
+  'study.autoAnalyze': 'on', 'lists.aiAutocreate': 'off', 'graph.aiModifySubGraphs': 'on',
+  'study.weekendMode': 'off'
 });
 const error = ref('');
 const saving = ref(false);
@@ -1043,6 +1069,7 @@ const fetchingModels = ref(false);
 const autoAnalyze = ref(true);
 const listsAutocreate = ref(false);
 const modifySubGraphs = ref(true);
+const weekendMode = ref(false);
 
 // 流式输出设置（AI 加油站等 7 项）
 const STREAM_ITEMS = [
@@ -1324,9 +1351,11 @@ async function load() {
   form['ai.embedModel'] = info.value.ai.embedModel || '';
   form['ai.visionModel'] = info.value.ai.visionModel || '';
   form['study.autoAnalyze'] = (info.value.values['study.autoAnalyze'] || 'on');
+  form['study.weekendMode'] = (info.value.values['study.weekendMode'] || 'off');
   form['lists.aiAutocreate'] = (info.value.values['lists.aiAutocreate'] || 'off');
   form['graph.aiModifySubGraphs'] = (info.value.values['graph.aiModifySubGraphs'] || 'on');
   autoAnalyze.value = form['study.autoAnalyze'] === 'on';
+  weekendMode.value = form['study.weekendMode'] === 'on';
   listsAutocreate.value = form['lists.aiAutocreate'] === 'on';
   modifySubGraphs.value = form['graph.aiModifySubGraphs'] === 'on';
   // 流式输出偏好
@@ -1346,6 +1375,7 @@ async function save() {
   try {
     const values = { ...form };
     values['study.autoAnalyze'] = autoAnalyze.value ? 'on' : 'off';
+    values['study.weekendMode'] = weekendMode.value ? 'on' : 'off';
     values['lists.aiAutocreate'] = listsAutocreate.value ? 'on' : 'off';
     values['graph.aiModifySubGraphs'] = modifySubGraphs.value ? 'on' : 'off';
     await api.saveSettings(values);

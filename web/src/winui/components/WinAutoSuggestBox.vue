@@ -464,7 +464,7 @@ onBeforeUnmount(() => {
 
 .win-asb-popup {
   position: fixed;
-  z-index: 1000;
+  z-index: 10002;
   overflow: hidden;
   padding: 0;
   box-sizing: border-box;

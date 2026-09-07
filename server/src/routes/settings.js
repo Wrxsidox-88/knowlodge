@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { setEnv } from '../config.js';
+import { setEnv, getEnv } from '../config.js';
 import { logger } from '../logger.js';
 import { getAIConfig, aiEnabled, visionEnabled, autoAnalyzeEnabled, listsAiAutocreateEnabled, aiModifySubGraphsEnabled, streamEnabled, getStreamCfg, testAI, listModels } from '../ai/client.js';
 import { indexSize } from '../services/vectorStore.js';
@@ -18,6 +18,7 @@ const KEY_TO_ENV = {
   'ai.embedModel': 'AI_EMBED_MODEL',
   'ai.visionModel': 'AI_VISION_MODEL',
   'study.autoAnalyze': 'STUDY_AUTO_ANALYZE',
+  'study.weekendMode': 'STUDY_WEEKEND_MODE',
   'lists.aiAutocreate': 'LISTS_AI_AUTOCREATE',
   'graph.aiModifySubGraphs': 'AI_MODIFY_SUBGRAPHS',
   'stream.qa': 'STREAM_QA',
@@ -53,6 +54,7 @@ settingsRouter.get('/', (req, res) => {
       'ai.embedModel': cfg.embedModel,
       'ai.visionModel': cfg.visionModel,
       'study.autoAnalyze': autoAnalyzeEnabled() ? 'on' : 'off',
+      'study.weekendMode': getEnv('STUDY_WEEKEND_MODE', 'off').toLowerCase() === 'on' ? 'on' : 'off',
       'lists.aiAutocreate': listsAiAutocreateEnabled() ? 'on' : 'off',
       'graph.aiModifySubGraphs': aiModifySubGraphsEnabled() ? 'on' : 'off',
       'stream.qa': streamEnabled('qa') ? 'on' : 'off',

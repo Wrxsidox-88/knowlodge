@@ -421,7 +421,7 @@ defineExpose({ showAt, hide, openAt, isOpen });
 <style scoped>
 .win-commandbar-flyout {
   position: fixed;
-  z-index: 9100;
+  z-index: 10002;
   max-width: 440px;
   color: var(--CommandBarFlyoutForeground, var(--text-primary));
   font-family: var(--ContentControlThemeFontFamily, 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif);

@@ -85,22 +85,22 @@
           <button :class="{ active: ctab === 'text' }" @click="ctab = 'text'">文本录入</button>
           <button :class="{ active: ctab === 'photo' }" @click="ctab = 'photo'">拍照/图片</button>
         </div>
-        <label class="field"><span>科目</span>
+        <div class="field"><span>科目</span>
           <WinComboBox
             :ItemsSource="wrongSubjectOptions"
             DisplayMemberPath="label"
             SelectedValuePath="value"
             v-model:SelectedValue="cform.subject"
             PlaceholderText="未知" />
-        </label>
-        <label class="field"><span>关联考试</span>
+        </div>
+        <div class="field"><span>关联考试</span>
           <WinComboBox
             :ItemsSource="examOptions"
             DisplayMemberPath="label"
             SelectedValuePath="value"
             v-model:SelectedValue="cform.examId"
             PlaceholderText="无" />
-        </label>
+        </div>
         <template v-if="ctab === 'text'">
           <label class="field"><span>题干 *</span><textarea v-model="cform.question" rows="4" placeholder="粘贴或输入题目内容"></textarea></label>
           <label class="field"><span>选项</span><input v-model="cform.options" placeholder="A. xxx B. xxx ...（选填）" /></label>
@@ -108,19 +108,20 @@
           <label class="field"><span>正确答案</span><input v-model="cform.correctAnswer" /></label>
         </template>
         <template v-else>
-          <label class="field"><span>错题照片（png/jpg，AI 识别题干）</span>
-            <input type="file" accept=".png,.jpg,.jpeg,.gif,.webp,.bmp" @change="onPhoto" />
+          <label class="field"><span>错题照片（png/jpg，AI 识别题干；可一次选择多张，回家后统一录入本周错题）</span>
+            <input type="file" accept=".png,.jpg,.jpeg,.gif,.webp,.bmp" multiple @change="onPhoto" />
           </label>
+          <div v-if="photoCount" class="muted" style="font-size: 12px; margin: -6px 0 8px">已选择 {{ photoCount }} 张照片，将生成 {{ photoCount }} 条错题记录并逐张 AI 分析</div>
           <label class="field"><span>补充说明（选填）</span><input v-model="cform.question" placeholder="如：第3题选择题" /></label>
         </template>
-        <label class="field"><span>自我评估：错因</span>
+        <div class="field"><span>自我评估：错因</span>
           <WinComboBox
             :ItemsSource="causeOptions"
             DisplayMemberPath="label"
             SelectedValuePath="value"
             v-model:SelectedValue="cform.errorCause"
             PlaceholderText="由 AI 判断" />
-        </label>
+        </div>
         <label class="field"><span>错因补充</span><input v-model="cform.causeNote" placeholder="选填" /></label>
         <label v-if="cform.errorCause === '__new__'" class="field">
           <span>新标签名（保存后自动加入标签库，AI 分析时也能复用）</span>
@@ -239,7 +240,7 @@ const creating = ref(false);
 const ctab = ref('text');
 const createError = ref('');
 const cSaving = ref(false);
-const photo = ref(null);
+const photos = ref([]);
 const filter = reactive({ subject: '', cause: '', status: '', keyword: '' });
 
 // 错题搜索建议：基于已加载题干的文本，随输入实时过滤
@@ -367,22 +368,27 @@ async function delCause(c) {
 }
 
 function onPhoto(e) {
-  photo.value = e.target.files[0] || null;
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  photos.value = files;
 }
+
+const photoCount = computed(() => photos.value.length);
 
 async function submitCreate() {
   createError.value = '';
   cSaving.value = true;
   try {
     if (ctab.value === 'photo') {
-      if (!photo.value) throw new Error('请选择错题照片');
+      const files = photos.value;
+      if (!files.length) throw new Error('请选择错题照片');
       const fd = new FormData();
-      fd.append('image', photo.value);
+      for (const f of files) fd.append('images', f);
       if (cform.subject) fd.append('subject', cform.subject);
       if (cform.question) fd.append('question', cform.question);
       if (cform.examId) fd.append('examId', cform.examId);
       if (cform.guide) fd.append('guide', cform.guide);
-      await api.uploadWrong(fd);
+      await api.uploadWrongBatch(fd);
     } else {
       let cause = cform.errorCause;
       if (cause === '__new__') {
@@ -403,7 +409,7 @@ async function submitCreate() {
     }
     creating.value = false;
     Object.assign(cform, { question: '', options: '', userAnswer: '', correctAnswer: '', causeNote: '', guide: '', newCauseName: '' });
-    photo.value = null;
+    photos.value = [];
     await Promise.all([load(), loadCauses()]);
   } catch (e) {
     createError.value = e.message;

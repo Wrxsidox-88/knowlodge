@@ -201,6 +201,7 @@ export const api = {
   getWrong: (id) => http.get(`/wrong/${id}`),
   createWrong: (data) => http.post('/wrong', data),
   uploadWrong: (form) => http.post('/wrong/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  uploadWrongBatch: (form) => http.post('/wrong/upload-batch', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 600000 }),
   analyzeWrong: (id, guide) => http.post(`/wrong/${id}/analyze`, { guide }),
   updateWrong: (id, data) => http.put(`/wrong/${id}`, data),
   deleteWrong: (id) => http.delete(`/wrong/${id}`),

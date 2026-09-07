@@ -21,16 +21,16 @@
             <WinTextBlock class="tree-node-name" :Text="item.name" />
             <span v-if="item.ai_editable" class="badge done" style="font-size: 10px; flex-shrink: 0">AI</span>
             <span class="row-actions" style="margin-left: auto; flex-shrink: 0" @click.stop>
-              <button v-if="item.kind === 'folder'" class="row-action" type="button" @click.stop="createNote(item.id)" title="在此目录下新建清单">＋清单</button>
-              <button v-if="item.kind === 'folder'" class="row-action" type="button" @click.stop="createFolder(item.id)" title="在此目录下新建子目录">＋目录</button>
-              <button class="row-action danger" type="button" @click.stop="removeNode(item)" :title="item.kind === 'folder' ? '删除目录（含其下全部内容）' : '删除清单'">✕</button>
+              <button v-if="item.kind === 'folder'" class="row-action" type="button" @click.stop="createNote(item.id)" title="在此目录下新建清单">新建清单</button>
+              <button v-if="item.kind === 'folder'" class="row-action" type="button" @click.stop="createFolder(item.id)" title="在此目录下新建子目录">新建目录</button>
+              <button class="row-action danger" type="button" @click.stop="removeNode(item)" :title="item.kind === 'folder' ? '删除目录（含其下全部内容）' : '删除清单'">删除</button>
             </span>
           </div>
         </template>
       </WinTreeView>
       <div class="muted" style="margin-top: 10px; font-size: 12px; line-height: 1.7">
-        · 目录可展开/折叠；悬停节点显示「＋清单/＋目录/✕」操作（点击不会误触展开）<br />
-        · 节点左侧图标或文字可选中清单；点击目录图标三角展开/折叠<br />
+        · 目录可展开/折叠；悬停节点显示「新建清单/新建目录/删除」操作（点击不会误触展开）<br />
+        · 点击任意层级的清单即可载入查看/编辑；点击目录图标三角展开/折叠<br />
         · 内容为 Markdown，支持公式渲染；顶部按钮可新建根目录/根清单<br />
         · 开启"允许 AI 编辑"后，AI 在对话/分析中可修改该清单
         · AI 分析时按需创建清单：见系统设置开关{{ aiAutocreate ? '（已开启）' : '（已关闭）' }}

@@ -38,7 +38,10 @@
                      :CanDragItems="canDragItems"
                      :AllowDrop="allowDrop"
                      :depth="depth + 1"
-                     :rootItems="rootRef">
+                     :rootItems="rootRef"
+                     @ItemInvoked="emit('ItemInvoked', $event)"
+                     @update:SelectedItem="emit('update:SelectedItem', $event)"
+                     @SelectionChanged="emit('SelectionChanged', $event)">
           <template #item="{ item }">
             <slot name="item" :item="item"></slot>
           </template>

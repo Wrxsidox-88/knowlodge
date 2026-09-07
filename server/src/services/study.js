@@ -1,5 +1,6 @@
 import { db } from '../db.js';
 import { logger } from '../logger.js';
+import { getEnv } from '../config.js';
 import { aiEnabled, chat } from '../ai/client.js';
 import { getTargets } from './targets.js';
 import {
@@ -214,11 +215,31 @@ export function registerExamEvidence(subject, score, totalScore) {
 
 // ---------- 查询视图 ----------
 
-function dueReviews(limit = 30) {
+/**
+ * 周末使用模式（STUDY_WEEKEND_MODE）：学生只有周末才能用电脑，
+ * 工作日不催复习——把截至本周日到期的复习统一汇总为「本周复习计划」，
+ * 回家后一次性完成。复习间隔仍按真实复习时间计算，不受开关影响。
+ */
+export function weekendModeEnabled() {
+  return getEnv('STUDY_WEEKEND_MODE', 'off').toLowerCase() === 'on';
+}
+
+function nextSundayISO() {
+  const now = new Date();
+  const day = now.getUTCDay(); // 0=周日
+  const diff = day === 0 ? 0 : 7 - day;
+  const d = new Date(now.getTime() + diff * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
+function dueReviews(limit = 30, { throughSunday = false } = {}) {
+  const cond = throughSunday
+    ? "date(m.next_review_at) <= date('now', 'weekday 0')"
+    : "date(m.next_review_at) <= date('now')";
   return db.prepare(
     `SELECT m.*, n.name, n.subject, n.category FROM mastery m
      JOIN knowledge_nodes n ON n.id = m.node_id
-     WHERE m.next_review_at IS NOT NULL AND date(m.next_review_at) <= date('now')
+     WHERE m.next_review_at IS NOT NULL AND ${cond}
      ORDER BY date(m.next_review_at) ASC, m.p_known ASC
      LIMIT ?`
   ).all(limit);
@@ -286,6 +307,8 @@ export function overview({ subject = null, dateFrom = null, dateTo = null } = {}
   const wrongTotal = db.prepare('SELECT COUNT(*) AS c FROM wrong_questions').get().c;
   const practiceRows = db.prepare('SELECT COUNT(*) AS total, ifnull(SUM(is_correct = 1), 0) AS correct FROM practices WHERE status != \'open\'').get();
 
+  const weekendMode = weekendModeEnabled();
+
   return {
     subjects,
     radar,
@@ -294,10 +317,16 @@ export function overview({ subject = null, dateFrom = null, dateTo = null } = {}
     causeDistribution: causeRows,
     trend: trend.map((t) => ({ ...t, pct: t.total_score ? Math.round((t.score / t.total_score) * 1000) / 10 : 0 })),
     targets: getTargets(),
-    reviewDue: dueReviews(20).map((r) => withLearningFields(r)),
-    reviewDueCount: db.prepare(
-      "SELECT COUNT(*) AS c FROM mastery WHERE next_review_at IS NOT NULL AND date(next_review_at) <= date('now')"
-    ).get().c,
+    reviewDue: dueReviews(20, { throughSunday: weekendMode }).map((r) => withLearningFields(r)),
+    reviewDueCount: weekendMode
+      ? db.prepare(
+          "SELECT COUNT(*) AS c FROM mastery WHERE next_review_at IS NOT NULL AND date(next_review_at) <= date('now', 'weekday 0')"
+        ).get().c
+      : db.prepare(
+          "SELECT COUNT(*) AS c FROM mastery WHERE next_review_at IS NOT NULL AND date(next_review_at) <= date('now')"
+        ).get().c,
+    weekendMode,
+    weekendDueThrough: weekendMode ? nextSundayISO() : null,
     wrongTotal,
     practiceStats: {
       total: practiceRows.total,
@@ -414,7 +443,11 @@ function templateEncourage(data) {
     tips.push(`最近一次考试得分率从 ${improving[0].pct}% 提升到 ${improving[1].pct}%，进步看得见！`);
   }
   if (data.reviewDueCount > 0) {
-    tips.push(`今天有 ${data.reviewDueCount} 个知识点等你复习，趁记忆还热乎，去学情分析页完成它们吧。`);
+    tips.push(
+      weekendModeEnabled()
+        ? `本周复习计划已排好：${data.reviewDueCount} 个知识点等周末统一过一遍，回家后到学情分析页完成它们。`
+        : `今天有 ${data.reviewDueCount} 个知识点等你复习，趁记忆还热乎，去学情分析页完成它们吧。`
+    );
   }
   if (data.weakNodes?.length) {
     const target = data.weakNodes[0];

@@ -6,9 +6,8 @@
         <h3 style="margin: 0">学习笔记</h3>
         <span class="muted" style="font-size: 12px">拍照上传自动 OCR 转写，AI 按科学笔记方法重整，可并入知识图谱</span>
         <div class="spacer"></div>
-        <button class="small" @click="openText">✎ 自由录入</button>
-        <button class="small primary" @click="$refs.photoInput.click()">📷 拍照上传</button>
-        <input ref="photoInput" type="file" accept=".png,.jpg,.jpeg,.gif,.webp,.bmp" style="display: none" @change="onPhoto" />
+        <button class="small" @click="openText">自由录入</button>
+        <button class="small primary" @click="openPhoto">拍照上传</button>
       </div>
       <div class="muted" style="font-size: 12px; line-height: 1.7; margin-bottom: 10px">
         · 笔记方法：<b>思维导图</b>（层级知识树）/ <b>康奈尔笔记</b>（线索-正文-总结）/ <b>结构大纲</b> / <b>闪卡</b>（问答自测）<br />
@@ -35,7 +34,7 @@
 
         <div v-if="expanded === n.id" style="margin-top: 10px">
           <div v-if="detail?.imageDataUrl" style="margin-bottom: 10px">
-            <img :src="detail.imageDataUrl" style="max-width: 320px; max-height: 260px; border-radius: 8px; border: 1px solid var(--win-card-stroke, #ddd)" />
+            <img :src="detail.imageDataUrl" style="max-width: 320px; max-height: 260px; border-radius: 8px; border: 1px solid var(--border)" />
           </div>
           <div v-if="detail?.structure" class="note-structure">
             <!-- 思维导图 -->
@@ -79,7 +78,7 @@
               <div class="muted" style="font-size: 12px; margin-top: 6px">点击卡片翻转查看答案</div>
             </template>
           </div>
-          <div v-if="detail?.raw_text" class="muted" style="font-size: 12px; margin-top: 10px; white-space: pre-wrap; max-height: 140px; overflow: auto; border-top: 1px dashed var(--win-card-stroke, #ddd); padding-top: 8px">
+          <div v-if="detail?.raw_text" class="muted" style="font-size: 12px; margin-top: 10px; white-space: pre-wrap; max-height: 140px; overflow: auto; border-top: 1px dashed var(--border); padding-top: 8px">
             原始内容：{{ detail.raw_text }}
           </div>
         </div>
@@ -87,54 +86,119 @@
     </div>
 
     <!-- 自由录入弹窗 -->
-    <div v-if="showTextDialog" class="dialog-mask" @click.self="showTextDialog = false">
-      <div class="dialog card" style="width: min(680px, 94vw); max-height: 86vh; overflow: auto">
-        <h3 style="margin-top: 0">自由录入笔记</h3>
-        <label class="field"><span>标题（选填）</span><input v-model="form.title" placeholder="如：二次函数图像性质" /></label>
-        <label class="field"><span>科目（选填）</span>
-          <select v-model="form.subject">
-            <option value="">自动识别</option>
-            <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
-          </select>
-        </label>
-        <label class="field"><span>笔记方法</span>
-          <select v-model="form.noteMethod">
-            <option v-for="m in methods" :key="m.value" :value="m.value">{{ m.label }}</option>
-          </select>
-        </label>
-        <label class="field"><span>笔记内容 *</span><textarea v-model="form.content" rows="9" placeholder="把课堂笔记、摘抄、想法随意粘贴进来，AI 会帮你重整为结构化笔记…"></textarea></label>
-        <label class="field"><span>整理引导（选填）</span><input v-model="form.guide" placeholder="如：重点突出易错点" /></label>
-        <label class="field check"><input type="checkbox" v-model="form.mergeGraph" /> 同时把知识点并入知识图谱</label>
-        <div class="toolbar" style="justify-content: flex-end">
-          <button @click="showTextDialog = false">取消</button>
-          <button class="primary" :disabled="saving" @click="saveText"><span v-if="saving" class="loading"></span>保存并整理</button>
+    <Teleport to="body">
+      <div v-if="showTextDialog" class="modal-mask" @click.self="showTextDialog = false">
+        <div class="modal">
+          <h3>自由录入笔记</h3>
+          <label class="field"><span>标题（选填）</span><input v-model="form.title" placeholder="如：二次函数图像性质" /></label>
+          <div class="field"><span>科目（选填，AI 可自动识别）</span>
+            <WinComboBox
+              :ItemsSource="subjectOptions"
+              DisplayMemberPath="label"
+              SelectedValuePath="value"
+              v-model:SelectedValue="form.subject"
+              PlaceholderText="自动识别" />
+          </div>
+          <div class="field"><span>笔记方法</span>
+            <WinComboBox
+              :ItemsSource="methodOptions"
+              DisplayMemberPath="label"
+              SelectedValuePath="value"
+              v-model:SelectedValue="form.noteMethod" />
+          </div>
+          <label class="field"><span>笔记内容 *</span><textarea v-model="form.content" rows="9" placeholder="把课堂笔记、摘抄、想法随意粘贴进来，AI 会帮你重整为结构化笔记…"></textarea></label>
+          <label class="field"><span>整理引导（选填）</span><input v-model="form.guide" placeholder="如：重点突出易错点" /></label>
+          <div class="settings-toggle-row">
+            <div class="settings-toggle-text">
+              <span class="settings-toggle-title">并入知识图谱</span>
+              <span class="settings-toggle-desc">把笔记中的知识点按层级自动挂载到知识图谱</span>
+            </div>
+            <WinToggleSwitch :IsOn="form.mergeGraph" @update:IsOn="form.mergeGraph = $event" />
+          </div>
+          <div class="toolbar" style="margin-top: 14px">
+            <button class="primary" :disabled="saving" @click="saveText"><span v-if="saving" class="loading"></span>保存并整理</button>
+            <button @click="showTextDialog = false">取消</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
+
+    <!-- 拍照上传弹窗 -->
+    <Teleport to="body">
+      <div v-if="showPhotoDialog" class="modal-mask" @click.self="showPhotoDialog = false">
+        <div class="modal">
+          <h3>拍照上传笔记</h3>
+          <label class="field"><span>笔记照片（png/jpg，视觉模型自动转写文字与公式）</span>
+            <input type="file" accept=".png,.jpg,.jpeg,.gif,.webp,.bmp" @change="onPickPhoto" />
+          </label>
+          <div v-if="photoPreview" style="margin-bottom: 10px">
+            <img :src="photoPreview" style="max-width: 100%; max-height: 220px; border-radius: 8px; border: 1px solid var(--border)" />
+          </div>
+          <div class="field"><span>科目（选填，AI 可自动识别）</span>
+            <WinComboBox
+              :ItemsSource="subjectOptions"
+              DisplayMemberPath="label"
+              SelectedValuePath="value"
+              v-model:SelectedValue="photoForm.subject"
+              PlaceholderText="自动识别" />
+          </div>
+          <div class="field"><span>笔记方法</span>
+            <WinComboBox
+              :ItemsSource="methodOptions"
+              DisplayMemberPath="label"
+              SelectedValuePath="value"
+              v-model:SelectedValue="photoForm.noteMethod" />
+          </div>
+          <div class="settings-toggle-row">
+            <div class="settings-toggle-text">
+              <span class="settings-toggle-title">并入知识图谱</span>
+              <span class="settings-toggle-desc">把笔记中的知识点按层级自动挂载到知识图谱</span>
+            </div>
+            <WinToggleSwitch :IsOn="photoForm.mergeGraph" @update:IsOn="photoForm.mergeGraph = $event" />
+          </div>
+          <div class="toolbar" style="margin-top: 14px">
+            <button class="primary" :disabled="saving || !photoFile" @click="savePhoto"><span v-if="saving" class="loading"></span>上传并整理</button>
+            <button @click="showPhotoDialog = false">取消</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- 重新整理弹窗 -->
-    <div v-if="showReDialog" class="dialog-mask" @click.self="showReDialog = false">
-      <div class="dialog card" style="width: min(560px, 94vw)">
-        <h3 style="margin-top: 0">重新整理笔记</h3>
-        <label class="field"><span>笔记方法</span>
-          <select v-model="reForm.noteMethod">
-            <option v-for="m in methods" :key="m.value" :value="m.value">{{ m.label }}</option>
-          </select>
-        </label>
-        <label class="field"><span>整理引导（选填）</span><input v-model="reForm.guide" placeholder="如：按考试题型组织" /></label>
-        <label class="field check"><input type="checkbox" v-model="reForm.mergeGraph" /> 同时把知识点并入知识图谱</label>
-        <div class="toolbar" style="justify-content: flex-end">
-          <button @click="showReDialog = false">取消</button>
-          <button class="primary" :disabled="saving" @click="doReanalyze"><span v-if="saving" class="loading"></span>开始整理</button>
+    <Teleport to="body">
+      <div v-if="showReDialog" class="modal-mask" @click.self="showReDialog = false">
+        <div class="modal">
+          <h3>重新整理笔记</h3>
+          <div class="field"><span>笔记方法</span>
+            <WinComboBox
+              :ItemsSource="methodOptions"
+              DisplayMemberPath="label"
+              SelectedValuePath="value"
+              v-model:SelectedValue="reForm.noteMethod" />
+          </div>
+          <label class="field"><span>整理引导（选填）</span><input v-model="reForm.guide" placeholder="如：按考试题型组织" /></label>
+          <div class="settings-toggle-row">
+            <div class="settings-toggle-text">
+              <span class="settings-toggle-title">并入知识图谱</span>
+              <span class="settings-toggle-desc">把笔记中的知识点按层级自动挂载到知识图谱</span>
+            </div>
+            <WinToggleSwitch :IsOn="reForm.mergeGraph" @update:IsOn="reForm.mergeGraph = $event" />
+          </div>
+          <div class="toolbar" style="margin-top: 14px">
+            <button class="primary" :disabled="saving" @click="doReanalyze"><span v-if="saving" class="loading"></span>开始整理</button>
+            <button @click="showReDialog = false">取消</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { api } from '../api.js';
+import WinComboBox from '../winui/components/WinComboBox.vue';
+import WinToggleSwitch from '../winui/components/WinToggleSwitch.vue';
 
 const items = ref([]);
 const detail = ref(null);
@@ -142,19 +206,24 @@ const expanded = ref(null);
 const pageLoading = ref(true);
 const saving = ref(false);
 const showTextDialog = ref(false);
+const showPhotoDialog = ref(false);
 const showReDialog = ref(false);
-const photoInput = ref(null);
+const photoFile = ref(null);
+const photoPreview = ref('');
 const subjects = ['数学', '物理', '化学', '生物', '语文', '英语', '历史', '地理', '政治'];
-const methods = [
+const subjectOptions = [
+  { label: '自动识别', value: '' },
+  ...subjects.map((s) => ({ label: s, value: s }))
+];
+const methodOptions = [
   { value: 'mindmap', label: '思维导图' },
   { value: 'cornell', label: '康奈尔笔记' },
   { value: 'outline', label: '结构大纲' },
   { value: 'flashcards', label: '闪卡' }
 ];
 const form = ref({ title: '', subject: '', content: '', noteMethod: 'mindmap', guide: '', mergeGraph: false });
+const photoForm = ref({ subject: '', noteMethod: 'mindmap', mergeGraph: false });
 const reForm = ref({ id: null, noteMethod: 'mindmap', guide: '', mergeGraph: false });
-let photoSubject = '';
-let photoMeta = { noteMethod: 'mindmap', guide: '', mergeGraph: false };
 
 function statusLabel(s) {
   return { pending: '待整理', analyzing: '整理中', done: '已整理', failed: '整理失败' }[s] || s;
@@ -185,19 +254,36 @@ function openText() {
   showTextDialog.value = true;
 }
 
+function openPhoto() {
+  photoFile.value = null;
+  photoPreview.value = '';
+  photoForm.value = { subject: '', noteMethod: 'mindmap', mergeGraph: false };
+  showPhotoDialog.value = true;
+}
+
+function onPickPhoto(e) {
+  photoFile.value = e.target.files?.[0] || null;
+  photoPreview.value = '';
+  if (photoFile.value) {
+    const reader = new FileReader();
+    reader.onload = () => (photoPreview.value = reader.result);
+    reader.readAsDataURL(photoFile.value);
+  }
+}
+
 async function saveText() {
   if (!form.value.content.trim()) return;
   saving.value = true;
   try {
-    const body = {
-      title: form.value.title || undefined,
-      subject: form.value.subject || undefined,
-      content: form.value.content,
-      noteMethod: form.value.noteMethod,
-      guide: form.value.guide || undefined,
-      mergeGraph: form.value.mergeGraph
-    };
-    await api.createNote(body);
+    const f = form.value;
+    await api.createNote({
+      title: f.title || undefined,
+      subject: f.subject || undefined,
+      content: f.content,
+      noteMethod: f.noteMethod,
+      guide: f.guide || undefined,
+      mergeGraph: f.mergeGraph
+    });
     showTextDialog.value = false;
     await load();
   } finally {
@@ -205,18 +291,22 @@ async function saveText() {
   }
 }
 
-function onPhoto(e) {
-  const file = e.target.files?.[0];
-  e.target.value = '';
-  if (!file) return;
-  photoSubject = '';
-  photoMeta = { noteMethod: 'mindmap', guide: '', mergeGraph: false };
-  const fd = new FormData();
-  fd.append('image', file);
-  if (photoSubject) fd.append('subject', photoSubject);
-  fd.append('noteMethod', photoMeta.noteMethod);
-  if (photoMeta.mergeGraph) fd.append('mergeGraph', '1');
-  api.uploadNote(fd).then(() => load());
+async function savePhoto() {
+  if (!photoFile.value) return;
+  saving.value = true;
+  try {
+    const f = photoForm.value;
+    const fd = new FormData();
+    fd.append('image', photoFile.value);
+    if (f.subject) fd.append('subject', f.subject);
+    fd.append('noteMethod', f.noteMethod);
+    if (f.mergeGraph) fd.append('mergeGraph', '1');
+    await api.uploadNote(fd);
+    showPhotoDialog.value = false;
+    await load();
+  } finally {
+    saving.value = false;
+  }
 }
 
 function openReanalyze(n) {
@@ -263,14 +353,14 @@ onMounted(load);
 </script>
 
 <style scoped>
-.node-card { border: 1px solid var(--win-card-stroke, #e2e2e2); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+.node-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
 .node-card .name { font-weight: 600; }
 .badge.failed { background: rgba(239, 95, 107, 0.15); color: #ef5f6b; }
 .mindmap-root { font-weight: 700; font-size: 15px; margin-bottom: 6px; }
 .mm-level, .mm-level ul { list-style: none; padding-left: 18px; margin: 0; }
 .mm-level > li { margin: 4px 0; }
 .cornell-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; }
-.cornell-cue, .cornell-notes, .cornell-summary { border: 1px solid var(--win-card-stroke, #e2e2e2); border-radius: 8px; padding: 10px; }
+.cornell-cue, .cornell-notes, .cornell-summary { border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
 .cue-item { margin: 4px 0; }
 .cornell-summary { margin-top: 10px; }
 .outline-sec { margin-bottom: 10px; }
@@ -278,12 +368,7 @@ onMounted(load);
 .outline-h.sub { margin-left: 16px; font-weight: 500; }
 .outline-p { margin-left: 28px; }
 .fc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
-.fc-card { border: 1px solid var(--win-card-stroke, #e2e2e2); border-radius: 10px; padding: 12px; min-height: 84px; cursor: pointer; position: relative; }
+.fc-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px; min-height: 84px; cursor: pointer; position: relative; }
 .fc-tag { position: absolute; top: 6px; right: 8px; font-size: 11px; color: #4f8cff; }
 .fc-tag.ans { color: #27c8a0; }
-.dialog-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.field { display: block; margin-bottom: 10px; }
-.field > span { display: block; font-size: 12px; margin-bottom: 4px; }
-.field input[type="text"], .field input:not([type]), .field textarea, .field select { width: 100%; box-sizing: border-box; }
-.field.check { display: flex; align-items: center; gap: 6px; }
 </style>

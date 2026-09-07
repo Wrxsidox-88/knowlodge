@@ -137,7 +137,7 @@ wrongRouter.post('/upload', upload.single('image'), async (req, res, next) => {
     const { subject, question, examId, guide } = req.body || {};
     const info = db.prepare(
       `INSERT INTO wrong_questions (exam_id, subject, question, status) VALUES (?, ?, ?, 'pending')`
-    ).run(examId ? Number(examId) : null, subject || null, question?.trim() || '', null);
+    ).run(examId ? Number(examId) : null, subject || null, question?.trim() || '');
     const id = Number(info.lastInsertRowid);
     const dir = path.join(IMAGE_DIR, `w${id}`);
     fs.mkdirSync(dir, { recursive: true });
@@ -150,6 +150,36 @@ wrongRouter.post('/upload', upload.single('image'), async (req, res, next) => {
       return res.status(202).json({ id, analyzing: true });
     }
     res.status(201).json({ id });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 批量拍照录入（周末集中录入场景）：多张照片一次提交，每张生成一条错题并逐张自动分析
+const uploadBatch = upload.array('images', 12);
+wrongRouter.post('/upload-batch', uploadBatch, async (req, res, next) => {
+  try {
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: '未接收到图片' });
+    const { subject, question, examId, guide } = req.body || {};
+    const ids = [];
+    for (const file of files) {
+      const info = db.prepare(
+        `INSERT INTO wrong_questions (exam_id, subject, question, status) VALUES (?, ?, ?, 'pending')`
+      ).run(examId ? Number(examId) : null, subject || null, question?.trim() || '');
+      const id = Number(info.lastInsertRowid);
+      const dir = path.join(IMAGE_DIR, `w${id}`);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.renameSync(file.path, path.join(dir, 'photo.png'));
+      db.prepare("UPDATE wrong_questions SET image_path = ? WHERE id = ?").run(`w${id}/photo.png`, id);
+      ids.push(id);
+      if (autoAnalyzeEnabled() && aiEnabled()) {
+        analyzeWrongQuestion(id, guide || '').catch(() => {});
+      }
+    }
+    logger.info(`错题批量拍照录入: ${ids.length} 张（#${ids.join(' #')}）`, { user: req.user.username });
+    const analyzing = autoAnalyzeEnabled() && aiEnabled();
+    res.status(analyzing ? 202 : 201).json({ ids, count: ids.length, analyzing });
   } catch (e) {
     next(e);
   }

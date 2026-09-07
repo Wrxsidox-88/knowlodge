@@ -86,23 +86,30 @@
         </template>
       </div>
       <div class="card">
-        <h3>今日复习提醒（自适应记忆调度）</h3>
-        <div v-if="!data.reviewDue?.length" class="empty">暂无到期复习任务</div>
+        <h3>{{ data.weekendMode ? '本周复习计划（周末统一复习）' : '今日复习提醒（自适应记忆调度）' }}</h3>
+        <div v-if="!data.reviewDue?.length" class="empty">{{ data.weekendMode ? '本周暂无待复习知识点' : '暂无到期复习任务' }}</div>
         <div v-for="r in data.reviewDue" :key="r.node_id" class="node-card">
           <div class="toolbar" style="margin: 0">
             <span class="name">{{ r.name }}</span>
             <span class="badge">{{ r.subject || '未分类' }}</span>
             <span class="muted">已错 {{ r.wrong }} 次 · 第 {{ r.stage + 1 }} 轮 · 保持 {{ Math.round((r.retention ?? 1) * 100) }}%</span>
+            <span v-if="data.weekendMode" class="badge">{{ (r.next_review_at || '').slice(0, 10) }} 起</span>
             <div class="spacer"></div>
             <button class="small primary" :disabled="doing === r.node_id" @click="done(r, 'recalled')">
-              <span v-if="doing === r.node_id" class="loading"></span>✓ 记得
+              <span v-if="doing === r.node_id" class="loading"></span>记得
             </button>
-            <button class="small" :disabled="doing === r.node_id" @click="done(r, 'forgot')">✗ 忘了</button>
+            <button class="small" :disabled="doing === r.node_id" @click="done(r, 'forgot')">忘了</button>
           </div>
           <div v-if="r.advice" class="muted" style="font-size: 12px; margin-top: 6px">建议复习方式：{{ r.advice }}</div>
         </div>
         <div class="muted" style="font-size: 12px; margin-top: 8px">
-          系统按每点的记忆稳定性预测回忆概率，降到阈值即安排复习；答「忘了」会缩短下次间隔，答「记得」会拉长间隔。
+          <template v-if="data.weekendMode">
+            周末使用模式已开启（设置 → 学习模式）：以上包含截至 {{ data.weekendDueThrough || '本周日' }} 到期的全部知识点，回家后统一完成即可；
+            配合错题本的「多张照片批量录入」，可一次录入整周错题。答「忘了」会缩短下次间隔，答「记得」会拉长间隔。
+          </template>
+          <template v-else>
+            系统按每点的记忆稳定性预测回忆概率，降到阈值即安排复习；答「忘了」会缩短下次间隔，答「记得」会拉长间隔。
+          </template>
         </div>
       </div>
     </div>
