@@ -19,6 +19,7 @@ export const router = createRouter({
     { path: '/graph', redirect: (to) => ({ path: '/qa', query: { ...to.query, tab: 'graph' } }) },
     { path: '/lists', redirect: (to) => ({ path: '/qa', query: { ...to.query, tab: 'lists' } }) },
     { path: '/mindmap', redirect: (to) => ({ path: '/qa', query: { ...to.query, tab: 'mindmap' } }) },
+    { path: '/notes', redirect: (to) => ({ path: '/qa', query: { ...to.query, tab: 'notes' } }) },
     { path: '/materials', component: views.MaterialsHub, meta: { title: '材料' } },
     { path: '/analysis', redirect: (to) => ({ path: '/materials', query: { ...to.query, tab: 'analysis' } }) },
     { path: '/studyhub', component: views.StudyHub, meta: { title: '学情中心' } },

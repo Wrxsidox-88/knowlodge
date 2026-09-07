@@ -28,6 +28,7 @@ import { listsRouter } from './routes/lists.js';
 import { systemRouter } from './routes/system.js';
 import { documentsRouter } from './routes/documents.js';
 import { mindmapsRouter } from './routes/mindmaps.js';
+import { notesRouter } from './routes/notes.js';
 import { encourageTick } from './services/study.js';
 import { startUpdateScheduler } from './services/updater.js';
 
@@ -61,6 +62,7 @@ app.use('/api/lists', listsRouter);
 app.use('/api/system', systemRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/mindmaps', mindmapsRouter);
+app.use('/api/notes', notesRouter);
 
 const distDir = path.resolve(ROOT_DIR, '..', 'web', 'dist');
 if (fs.existsSync(distDir)) {

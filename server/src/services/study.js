@@ -2,59 +2,224 @@ import { db } from '../db.js';
 import { logger } from '../logger.js';
 import { aiEnabled, chat } from '../ai/client.js';
 import { getTargets } from './targets.js';
+import {
+  BKT, MEMORY,
+  posteriorOnCorrect, posteriorOnWrong,
+  recallProbability, stabilityAfterRecall, stabilityAfterLapse,
+  reviewIntervalDays, migrateLegacy, masteryFromState, daysSince
+} from './bayes.js';
+import { subjectProfile } from './subjects.js';
 
 export const ERROR_CAUSES = ['知识盲区', '逻辑错误', '概念混淆', '粗心', '方法错误', '其他'];
+// 兼容保留：调度已改为基于记忆稳定性的自适应间隔（bayes.reviewIntervalDays）
 export const EBBINGHAUS_INTERVALS = [1, 2, 4, 7, 15, 30];
 
+// ---------- 学习状态读写 ----------
+
+/** 读取某知识点的概率学习状态（旧行自动迁移，不落库） */
+export function learningStateOf(row) {
+  if (row && row.p_known != null && row.stability != null) {
+    return { pKnown: row.p_known, stability: row.stability, migrated: false };
+  }
+  const legacy = migrateLegacy({
+    correct: row?.correct || 0,
+    wrong: row?.wrong || 0,
+    stage: row?.stage || 0,
+    last_review_at: row?.last_review_at || null
+  });
+  return { ...legacy, migrated: true };
+}
+
+function getMasteryRow(nodeId) {
+  return db.prepare('SELECT * FROM mastery WHERE node_id = ?').get(Number(nodeId));
+}
+
+/** 展示用掌握度：P(掌握|证据流) × 当前记忆可提取概率 */
 export function masteryScore(m) {
   if (!m) return 60;
-  const total = m.correct + m.wrong;
-  const base = total === 0 ? 60 : (100 * m.correct) / total;
-  let factor = 1;
-  const ref = m.last_review_at || null;
-  if (ref) {
-    const days = (Date.now() - Date.parse(ref.replace(' ', 'T') + 'Z')) / 86400000;
-    factor = 0.5 + 0.5 * Math.exp(-Math.max(0, days) / 14);
+  const total = (m.correct || 0) + (m.wrong || 0);
+  if (total === 0 && m.p_known == null) return 60;
+  const { pKnown, stability } = learningStateOf(m);
+  const days = daysSince(m.last_review_at);
+  return masteryFromState(pKnown, stability, days ?? 0, Boolean(m.last_review_at));
+}
+
+/** 记忆保持率（0~1）：距上次成功回忆的瞬时可提取概率 */
+export function retentionOf(row) {
+  if (!row?.last_review_at) return 1;
+  const { stability } = learningStateOf(row);
+  return recallProbability(stability, daysSince(row.last_review_at) ?? 0);
+}
+
+function withLearningFields(row) {
+  if (!row) return row;
+  const { pKnown, stability } = learningStateOf(row);
+  const retention = retentionOf(row);
+  return {
+    ...row,
+    pKnown,
+    stability,
+    retention,
+    mastery: masteryFromState(pKnown, stability, daysSince(row.last_review_at) ?? 0, Boolean(row.last_review_at)),
+    advice: subjectProfile(row.subject).reviewStyle
+  };
+}
+
+// ---------- 知识图谱传播（关联骨架） ----------
+
+const RELATION_WEIGHTS = [
+  [/前置|先修|依赖|基础|前提/, 0.35],
+  [/包含|组成|隶属|属于|分为/, 0.28],
+  [/相关|应用|类比|同义|推导|延伸/, 0.15]
+];
+
+function relationWeight(relation) {
+  const r = String(relation || '');
+  for (const [re, w] of RELATION_WEIGHTS) if (re.test(r)) return w;
+  return 0.12;
+}
+
+/**
+ * 证据在图谱上传播：某节点掌握概率变化后，相邻节点按关系类型
+ * 获得小比例的同向调整（共享盲区/共享基础），单次传播幅度受限。
+ */
+export function propagateMastery(nodeId, delta) {
+  const d = Number(delta) || 0;
+  if (!nodeId || Math.abs(d) < 0.02) return;
+  const neighbors = db.prepare(
+    `SELECT m.node_id AS id, m.p_known, e.relation FROM knowledge_edges e
+     JOIN mastery m ON m.node_id = (CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END)
+     WHERE (e.source_id = ? OR e.target_id = ?) AND m.node_id != ?`
+  ).all(nodeId, nodeId, nodeId, nodeId);
+  const update = db.prepare('UPDATE mastery SET p_known = ? WHERE node_id = ?');
+  for (const nb of neighbors) {
+    const cur = nb.p_known != null ? nb.p_known : BKT.L0;
+    const shift = Math.max(-0.08, Math.min(0.08, d * relationWeight(nb.relation) * 0.5));
+    update.run(Math.min(0.99, Math.max(0.01, cur + shift)), nb.id);
   }
-  return Math.min(100, Math.round(base * factor));
 }
 
+// ---------- 证据更新核心 ----------
+
+/**
+ * 对单个知识点吸收一次证据（贝叶斯更新 + 记忆更新 + 调度 + 传播）。
+ * evidence: { correct: true/false/null, strength: 0~1, memory: 'recall'|'lapse'|null }
+ */
+export function applyEvidence(nodeId, { correct = null, strength = 1, memory = null } = {}) {
+  const id = Number(nodeId);
+  if (!id) return null;
+  const row = getMasteryRow(id);
+  const node = db.prepare('SELECT subject FROM knowledge_nodes WHERE id = ?').get(id);
+  const state = learningStateOf(row);
+  let L = state.pKnown;
+  let theta = state.stability;
+  const LBefore = L;
+
+  if (correct === true) L = posteriorOnCorrect(L, { strength });
+  else if (correct === false) L = posteriorOnWrong(L, { strength });
+
+  const days = row?.last_review_at ? daysSince(row.last_review_at) : null;
+  if (memory === 'recall') theta = stabilityAfterRecall(theta, days ?? 0.5);
+  else if (memory === 'lapse') theta = stabilityAfterLapse(theta);
+  else if (correct === true) theta = stabilityAfterRecall(theta, days ?? 0.5);
+  else if (correct === false) theta = stabilityAfterLapse(theta);
+
+  const interval = reviewIntervalDays(theta);
+  const nowSql = "datetime('now')";
+  const nextSql = `datetime('now', '+${Math.round(interval * 86400)} seconds')`;
+
+  if (!row) {
+    db.prepare(
+      `INSERT INTO mastery (node_id, correct, wrong, stage, last_review_at, next_review_at, p_known, stability)
+       VALUES (?, ?, ?, 0, ${correct === true || memory === 'recall' ? nowSql : 'NULL'}, ${nextSql}, ?, ?)`
+    ).run(id, correct === true ? 1 : 0, correct === false ? 1 : 0, L, theta);
+  } else {
+    db.prepare(
+      `UPDATE mastery SET
+         correct = correct + ?, wrong = wrong + ?,
+         stage = CASE WHEN ? = 'recall' THEN stage + 1 WHEN ? = 'lapse' THEN 0 ELSE stage END,
+         last_review_at = ${correct === true || memory === 'recall' ? nowSql : 'last_review_at'},
+         next_review_at = ${nextSql},
+         p_known = ?, stability = ?
+       WHERE node_id = ?`
+    ).run(
+      correct === true ? 1 : 0,
+      correct === false ? 1 : 0,
+      memory || '',
+      memory || '',
+      L, theta, id
+    );
+  }
+
+  propagateMastery(id, L - LBefore);
+  return getMasteryRow(id);
+}
+
+/** 错题证据：真实情境下做错，是最强的"未掌握"信号（供错题分析管线调用） */
 export function registerWrongOnNodes(nodeIds) {
-  const stmt = db.prepare(
-    `INSERT INTO mastery (node_id, wrong, next_review_at) VALUES (?, 1, date('now', '+1 day'))
-     ON CONFLICT(node_id) DO UPDATE SET
-       wrong = wrong + 1,
-       next_review_at = ifnull(next_review_at, date('now', '+1 day'))`
-  );
-  for (const id of nodeIds) stmt.run(id);
+  for (const id of nodeIds || []) {
+    try {
+      applyEvidence(id, { correct: false, strength: 1 });
+    } catch (e) {
+      logger.warn(`错题证据写入失败 node=${id}: ${e.message}`);
+    }
+  }
 }
 
+/** 练习作答证据：AI 判题/自评结果回写 */
 export function recordPracticeResult(nodeId, isCorrect) {
   if (!nodeId) return;
-  const field = isCorrect ? 'correct' : 'wrong';
-  db.prepare(
-    `INSERT INTO mastery (node_id, ${field}) VALUES (?, 1)
-     ON CONFLICT(node_id) DO UPDATE SET ${field} = ${field} + 1`
-  ).run(nodeId);
+  applyEvidence(nodeId, { correct: Boolean(isCorrect), strength: 1 });
 }
 
-export function completeReview(nodeId) {
-  const m = db.prepare('SELECT * FROM mastery WHERE node_id = ?').get(nodeId);
-  if (!m) return null;
-  const stage = Math.min(m.stage + 1, EBBINGHAUS_INTERVALS.length - 1);
-  const interval = EBBINGHAUS_INTERVALS[stage];
-  db.prepare(
-    `UPDATE mastery SET stage = ?, last_review_at = datetime('now'), next_review_at = date('now', '+' || ? || ' day') WHERE node_id = ?`
-  ).run(stage, interval, nodeId);
-  return db.prepare('SELECT * FROM mastery WHERE node_id = ?').get(nodeId);
+/**
+ * 完成一次复习（自适应记忆调度）。
+ * result='recalled'：成功回忆 → 稳定性上调、间隔拉长；
+ * result='forgot'：遗忘 → 稳定性收缩、间隔缩短，轮次归零。
+ */
+export function completeReview(nodeId, result = 'recalled') {
+  const row = getMasteryRow(nodeId);
+  if (!row) return null;
+  const forgot = String(result) === 'forgot';
+  const next = applyEvidence(nodeId, {
+    correct: forgot ? false : true,
+    // 复习中成功回忆带有"刚看过提示"的效应，作为掌握证据打折扣
+    strength: forgot ? 0.8 : 0.6,
+    memory: forgot ? 'lapse' : 'recall'
+  });
+  return next;
 }
+
+/** 考试成绩作为科目级校准证据：实际得分率低于模型预期时，该科各知识点掌握后验小幅下调 */
+export function registerExamEvidence(subject, score, totalScore) {
+  const pct = totalScore > 0 ? score / totalScore : null;
+  if (!subject || pct == null) return;
+  const rows = db.prepare(
+    `SELECT m.* FROM mastery m JOIN knowledge_nodes n ON n.id = m.node_id
+     WHERE n.subject = ?`
+  ).all(subject);
+  if (!rows.length) return;
+  let expected = 0;
+  for (const r of rows) expected += learningStateOf(r).pKnown;
+  expected /= rows.length;
+  const delta = Math.max(-0.25, Math.min(0.25, expected - pct));
+  if (Math.abs(delta) < 0.03) return;
+  const update = db.prepare('UPDATE mastery SET p_known = ? WHERE node_id = ?');
+  for (const r of rows) {
+    const cur = learningStateOf(r).pKnown;
+    update.run(Math.min(0.99, Math.max(0.01, cur - delta * 0.12)), r.node_id);
+  }
+  logger.info(`考试成绩校准证据: ${subject} 得分率 ${(pct * 100).toFixed(1)}% vs 预期 ${(expected * 100).toFixed(1)}%，已调整 ${rows.length} 个知识点`);
+}
+
+// ---------- 查询视图 ----------
 
 function dueReviews(limit = 30) {
   return db.prepare(
     `SELECT m.*, n.name, n.subject, n.category FROM mastery m
      JOIN knowledge_nodes n ON n.id = m.node_id
-     WHERE m.wrong > 0 AND m.next_review_at IS NOT NULL AND date(m.next_review_at) <= date('now')
-     ORDER BY date(m.next_review_at) ASC, m.wrong DESC
+     WHERE m.next_review_at IS NOT NULL AND date(m.next_review_at) <= date('now')
+     ORDER BY date(m.next_review_at) ASC, m.p_known ASC
      LIMIT ?`
   ).all(limit);
 }
@@ -62,13 +227,11 @@ function dueReviews(limit = 30) {
 function weakNodes({ subject = null, limit = 15 } = {}) {
   const where = subject ? 'AND n.subject = ?' : '';
   const rows = db.prepare(
-    `SELECT n.id, n.name, n.subject, n.category, m.correct, m.wrong, m.stage, m.next_review_at
+    `SELECT n.id, n.name, n.subject, n.category, m.correct, m.wrong, m.stage, m.last_review_at, m.next_review_at, m.p_known, m.stability
      FROM mastery m JOIN knowledge_nodes n ON n.id = m.node_id
-     WHERE m.wrong > 0 ${where}
-     ORDER BY m.wrong DESC
-     LIMIT ?`
-  ).all(...(subject ? [subject] : []), limit * 3);
-  const list = rows.map((r) => ({ ...r, mastery: masteryScore(r) }));
+     WHERE (m.wrong > 0 OR m.correct > 0 OR m.p_known IS NOT NULL) ${where}`
+  ).all(...(subject ? [subject] : []));
+  const list = rows.map((r) => withLearningFields(r));
   list.sort((a, b) => a.mastery - b.mastery);
   return list.slice(0, limit);
 }
@@ -85,7 +248,7 @@ export function overview({ subject = null, dateFrom = null, dateTo = null } = {}
   };
 
   const subjectMastery = db.prepare(
-    `SELECT n.subject, m.correct, m.wrong, m.stage, m.last_review_at FROM mastery m
+    `SELECT n.subject, m.correct, m.wrong, m.stage, m.last_review_at, m.p_known, m.stability FROM mastery m
      JOIN knowledge_nodes n ON n.id = m.node_id WHERE n.subject IS NOT NULL`
   ).all();
   const bySubject = new Map();
@@ -131,9 +294,9 @@ export function overview({ subject = null, dateFrom = null, dateTo = null } = {}
     causeDistribution: causeRows,
     trend: trend.map((t) => ({ ...t, pct: t.total_score ? Math.round((t.score / t.total_score) * 1000) / 10 : 0 })),
     targets: getTargets(),
-    reviewDue: dueReviews(20).map((r) => ({ ...r, mastery: masteryScore(r) })),
+    reviewDue: dueReviews(20).map((r) => withLearningFields(r)),
     reviewDueCount: db.prepare(
-      "SELECT COUNT(*) AS c FROM mastery WHERE wrong > 0 AND next_review_at IS NOT NULL AND date(next_review_at) <= date('now')"
+      "SELECT COUNT(*) AS c FROM mastery WHERE next_review_at IS NOT NULL AND date(next_review_at) <= date('now')"
     ).get().c,
     wrongTotal,
     practiceStats: {
@@ -171,7 +334,7 @@ export async function reportSummary(guide = '') {
   const reply = await chat([
     {
       role: 'system',
-      content: '你是学情分析师。根据统计数据输出简洁明的学情报告（Markdown，300 字内）：整体评价、最薄弱的知识点与成因、下一步提升建议。不要编造数据中没有的内容。'
+      content: '你是学情分析师。掌握度由贝叶斯知识追踪（掌握后验×记忆保持率）估计，0~100。根据统计数据输出简洁明的学情报告（Markdown，300 字内）：整体评价、最薄弱的知识点与成因、下一步提升建议（按学科学习方法给出具体做法）。不要编造数据中没有的内容。'
     },
     {
       role: 'user',

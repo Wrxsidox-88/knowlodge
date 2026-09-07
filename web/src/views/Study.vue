@@ -81,23 +81,28 @@
             <i class="muted">{{ n.subject }}</i>
           </span>
           <div class="muted" style="margin-top: 8px">
-            掌握度 = 练习正确率 × 记忆保持系数（随时间衰减，复习可恢复）。颜色：绿≥80 / 黄≥60 / 红&lt;60
+            掌握度 = 贝叶斯知识追踪（掌握后验）× 当前记忆保持率（随时间衰减，复习可恢复）。颜色：绿≥80 / 黄≥60 / 红&lt;60
           </div>
         </template>
       </div>
       <div class="card">
-        <h3>今日复习提醒（艾宾浩斯曲线）</h3>
+        <h3>今日复习提醒（自适应记忆调度）</h3>
         <div v-if="!data.reviewDue?.length" class="empty">暂无到期复习任务</div>
         <div v-for="r in data.reviewDue" :key="r.node_id" class="node-card">
           <div class="toolbar" style="margin: 0">
             <span class="name">{{ r.name }}</span>
             <span class="badge">{{ r.subject || '未分类' }}</span>
-            <span class="muted">已错 {{ r.wrong }} 次 · 第 {{ r.stage + 1 }} 轮</span>
+            <span class="muted">已错 {{ r.wrong }} 次 · 第 {{ r.stage + 1 }} 轮 · 保持 {{ Math.round((r.retention ?? 1) * 100) }}%</span>
             <div class="spacer"></div>
-            <button class="small primary" :disabled="doing === r.node_id" @click="done(r)">
-              <span v-if="doing === r.node_id" class="loading"></span>完成复习
+            <button class="small primary" :disabled="doing === r.node_id" @click="done(r, 'recalled')">
+              <span v-if="doing === r.node_id" class="loading"></span>✓ 记得
             </button>
+            <button class="small" :disabled="doing === r.node_id" @click="done(r, 'forgot')">✗ 忘了</button>
           </div>
+          <div v-if="r.advice" class="muted" style="font-size: 12px; margin-top: 6px">建议复习方式：{{ r.advice }}</div>
+        </div>
+        <div class="muted" style="font-size: 12px; margin-top: 8px">
+          系统按每点的记忆稳定性预测回忆概率，降到阈值即安排复习；答「忘了」会缩短下次间隔，答「记得」会拉长间隔。
         </div>
       </div>
     </div>
@@ -379,10 +384,10 @@ function renderTrend() {
   );
 }
 
-async function done(r) {
+async function done(r, result = 'recalled') {
   doing.value = r.node_id;
   try {
-    await api.completeReview(r.node_id);
+    await api.completeReview(r.node_id, { result });
     await load();
   } catch (e) {
     error.value = e.message;

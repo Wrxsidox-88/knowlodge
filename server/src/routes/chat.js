@@ -6,6 +6,7 @@ import { generateDocument } from './documents.js';
 import { createJob, runAnalysis } from '../services/analyzer.js';
 import { aiEnabled } from '../ai/client.js';
 import { createMindMap } from './mindmaps.js';
+import { analyzeNote } from '../services/notes.js';
 
 export const chatRouter = Router();
 
@@ -249,6 +250,17 @@ chatRouter.post('/tools/execute', async (req, res, next) => {
         });
         if (!mm) return res.status(400).json({ error: '脑图 content 格式不正确' });
         return res.json({ ok: true, tool, result: { id: mm.id }, message: `已创建脑图《${mm.name}》` });
+      }
+      case 'note_create': {
+        if (!args.content?.trim()) return res.status(400).json({ error: '笔记需要 content' });
+        const method = ['mindmap', 'cornell', 'outline', 'flashcards'].includes(args.noteMethod) ? args.noteMethod : 'mindmap';
+        const info = db.prepare(
+          "INSERT INTO notes (title, subject, source, raw_text, note_method, status) VALUES (?, ?, 'text', ?, ?, 'pending')"
+        ).run(args.title?.trim() || null, args.subject || null, String(args.content).trim(), method);
+        const id = Number(info.lastInsertRowid);
+        // 后台自动分析（AI 不可用时该笔记保持 pending，可在笔记页手动分析）
+        analyzeNote(id, { method, guide: '', mergeGraph: Boolean(args.mergeGraph) }).catch(() => { /* 失败已落库 */ });
+        return res.json({ ok: true, tool, result: { id }, message: `已创建笔记《${args.title || '未命名'}》（${method}），正在后台整理` });
       }
       default:
         return res.status(400).json({ error: `不支持的工具: ${tool}` });

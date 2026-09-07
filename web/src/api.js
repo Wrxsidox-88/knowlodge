@@ -210,7 +210,7 @@ export const api = {
   deleteCause: (id) => http.delete(`/wrong/causes/${id}`),
 
   studyOverview: (subject, params = {}) => http.get('/study/overview', { params: { ...(subject ? { subject } : {}), ...params } }),
-  completeReview: (nodeId) => http.post(`/study/reviews/${nodeId}/complete`),
+  completeReview: (nodeId, opts = {}) => http.post(`/study/reviews/${nodeId}/complete`, { result: opts.result || 'recalled' }),
   generatePractice: (nodeId) => http.post('/study/practice/generate', nodeId ? { nodeId } : {}),
   listPractices: () => http.get('/study/practices'),
   submitPractice: (id, data) => http.post(`/study/practices/${id}/submit`, data),
@@ -260,6 +260,15 @@ export const api = {
   updateMindMap: (id, data) => http.put(`/mindmaps/${id}`, data),
   deleteMindMap: (id) => http.delete(`/mindmaps/${id}`),
   aiGenerateMindMap: (prompt, refs) => http.post('/mindmaps/ai-generate', { prompt, refs }),
+
+  listNotes: (params) => http.get('/notes', { params }),
+  getNote: (id) => http.get(`/notes/${id}`),
+  createNote: (data) => http.post('/notes', data),
+  uploadNote: (form) => http.post('/notes/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  analyzeNote: (id, data) => http.post(`/notes/${id}/analyze`, data),
+  noteToMindmap: (id) => http.post(`/notes/${id}/mindmap`),
+  updateNote: (id, data) => http.put(`/notes/${id}`, data),
+  deleteNote: (id) => http.delete(`/notes/${id}`),
 
   exportData: () =>
     fetch('/api/system/export', { headers: authHeaders() }),

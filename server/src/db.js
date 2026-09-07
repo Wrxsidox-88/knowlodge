@@ -191,13 +191,19 @@ CREATE TABLE IF NOT EXISTS wrong_question_nodes (
   PRIMARY KEY (question_id, node_id)
 );
 
+-- 贝叶斯学习状态估计（v1.7.0）：
+--   p_known   = 知识掌握后验概率 P(掌握|证据流)（BKT 贝叶斯知识追踪）
+--   stability = 记忆稳定性 θ（天），回忆概率 P(recall,t)=exp(-t/θ)，复习调度由此自适应推导
+--   correct/wrong 保留为证据计数；stage 保留为"复习轮次"展示字段
 CREATE TABLE IF NOT EXISTS mastery (
   node_id INTEGER PRIMARY KEY REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
   correct INTEGER NOT NULL DEFAULT 0,
   wrong INTEGER NOT NULL DEFAULT 0,
   stage INTEGER NOT NULL DEFAULT 0,
   last_review_at TEXT,
-  next_review_at TEXT
+  next_review_at TEXT,
+  p_known REAL,
+  stability REAL
 );
 
 CREATE TABLE IF NOT EXISTS practices (
@@ -304,6 +310,23 @@ CREATE TABLE IF NOT EXISTS token_usage (
 );
 
 CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage (ts);
+
+-- 学习笔记（v1.7.0）：自由录入 / 拍照上传 → 视觉模型转写 → AI 结构化为科学笔记方法
+CREATE TABLE IF NOT EXISTS notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT,
+  subject TEXT,
+  source TEXT NOT NULL DEFAULT 'text',
+  image_path TEXT,
+  raw_text TEXT,
+  note_method TEXT NOT NULL DEFAULT 'mindmap',
+  structure TEXT,
+  graph_merged INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  guide TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 db.exec(SCHEMA);
@@ -336,6 +359,8 @@ ensureColumn('exams', 'exam_event_id', 'INTEGER REFERENCES exam_events(id) ON DE
 ensureColumn('exams', 'grade_rank', 'INTEGER');
 ensureColumn('exams', 'class_rank', 'INTEGER');
 ensureColumn('analysis_jobs', 'batch_id', 'INTEGER REFERENCES analysis_batches(id) ON DELETE SET NULL');
+ensureColumn('mastery', 'p_known', 'REAL');
+ensureColumn('mastery', 'stability', 'REAL');
 db.exec('CREATE INDEX IF NOT EXISTS idx_jobs_batch ON analysis_jobs(batch_id)');
 
 const DEFAULT_CAUSE_TAGS = [

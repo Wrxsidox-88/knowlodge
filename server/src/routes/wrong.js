@@ -97,7 +97,7 @@ wrongRouter.get('/:id', (req, res) => {
   let imageDataUrl = null;
   if (row.image_path) {
     try {
-      const buf = fs.readFileSync(path.join(IMAGE_DIR, path.basename(row.image_path)));
+      const buf = fs.readFileSync(path.join(IMAGE_DIR, row.image_path));
       imageDataUrl = `data:image/png;base64,${buf.toString('base64')}`;
     } catch {
       /* 图片缺失 */

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { logger } from '../logger.js';
 import { aiEnabled, chat } from '../ai/client.js';
+import { registerExamEvidence } from '../services/study.js';
 
 export const examsRouter = Router();
 
@@ -173,6 +174,12 @@ examsRouter.post('/', (req, res) => {
     'INSERT INTO exams (subject, title, exam_date, total_score, score, grade_rank, class_rank, note, exam_event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(subject.trim(), title?.trim() || null, examDate, Number(totalScore), Number(score), gr, cr, note || null, eventId);
   const id = Number(info.lastInsertRowid);
+  // 考试成绩作为科目级校准证据，微调该科各知识点的掌握后验（贝叶斯状态估计）
+  try {
+    registerExamEvidence(subject.trim(), Number(score), Number(totalScore));
+  } catch (e) {
+    logger.warn(`考试成绩证据处理失败: ${e.message}`);
+  }
   logger.info(`考试记录入库: #${id} ${subject} ${score}/${totalScore}${eventId ? `（事件#${eventId}）` : ''}`, { user: req.user.username });
   res.status(201).json({ id, eventId });
 });

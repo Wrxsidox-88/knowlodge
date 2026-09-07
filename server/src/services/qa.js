@@ -2,7 +2,7 @@ import { db } from '../db.js';
 import { logger } from '../logger.js';
 import { aiEnabled, chat, chatStream } from '../ai/client.js';
 import { semanticSearch } from './search.js';
-import { masteryScore } from './study.js';
+import { masteryScore, retentionOf } from './study.js';
 import { FIGURE_TOOL_DOC } from './figures.js';
 
 export const TOOL_DOC = `【工具能力】你可以在回答中输出代码块调用系统工具。\`\`\`figure 图形块会被自动渲染；\`\`\`tool 块属于敏感操作，需用户在界面上明确授权后才执行。输出工具块前先用一句话说明你的意图。
@@ -15,6 +15,7 @@ tool 块格式：\`\`\`tool {"tool":"<工具名>","args":{...}}
 - list_create 新建知识清单：{"name":"清单名","description":"用途说明(辅助AI后续编辑)","content":"Markdown 内容","parentId":null}
 - list_edit 更新知识清单（仅限允许AI编辑的清单）：{"id":1,"mode":"append或replace","content":"Markdown 内容"}
 - mindmap_create 新建脑图（思维导图）：{"name":"脑图名","subject":"科目可省略","content":{"text":"中心主题","children":[{"text":"分支","children":[{"text":"子节点","children":[]}]}]}}
+- note_create 新建学习笔记（自由录入，AI 将自动整理为结构化笔记）：{"title":"笔记标题","subject":"科目可省略","content":"笔记正文（Markdown）","noteMethod":"mindmap|cornell|outline|flashcards 可省略默认 mindmap"}
 规则：一次回答最多调用一个 tool；ID 必须来自对话中真实出现的系统数据，不得编造。`;
 
 export function buildReferencesContext(references) {
@@ -42,12 +43,15 @@ export function buildReferencesContext(references) {
 }
 
 export function buildLearningProfile() {
-  const weak = db.prepare(
-    `SELECT n.name, n.subject, m.correct, m.wrong, m.stage, m.last_review_at
+  const rows = db.prepare(
+    `SELECT n.name, n.subject, m.correct, m.wrong, m.stage, m.last_review_at, m.next_review_at, m.p_known, m.stability
      FROM mastery m JOIN knowledge_nodes n ON n.id = m.node_id
-     WHERE m.wrong > 0 ORDER BY m.wrong DESC LIMIT 5`
-  ).all().map((r) => ({ ...r, mastery: masteryScore(r) }));
+     WHERE m.wrong > 0 OR m.correct > 0 OR m.p_known IS NOT NULL
+     ORDER BY m.wrong DESC, m.correct ASC LIMIT 40`
+  ).all();
+  const weak = rows.map((r) => ({ ...r, mastery: masteryScore(r) }));
   weak.sort((a, b) => a.mastery - b.mastery);
+  const weakTop = weak.slice(0, 5);
 
   const recentWrong = db.prepare(
     `SELECT id, subject, question, error_cause FROM wrong_questions ORDER BY id DESC LIMIT 5`
@@ -59,15 +63,18 @@ export function buildLearningProfile() {
     "SELECT COUNT(*) AS total, ifnull(SUM(is_correct = 1), 0) AS correct FROM practices WHERE status != 'open'"
   ).get();
   const reviewDue = db.prepare(
-    "SELECT COUNT(*) AS c FROM mastery WHERE wrong > 0 AND next_review_at IS NOT NULL AND date(next_review_at) <= date('now')"
+    "SELECT COUNT(*) AS c FROM mastery WHERE next_review_at IS NOT NULL AND date(next_review_at) <= date('now')"
   ).get().c;
 
   const hasData = weak.length || recentWrong.length || recentExams.length;
   if (!hasData) return null;
 
-  const lines = ['【用户个人学情（来自系统统计，可用于个性化回答）】'];
-  if (weak.length) {
-    lines.push(`薄弱知识点：${weak.map((n) => `${n.name}(${n.subject || '未分类'}，掌握度${n.mastery}%)`).join('；')}`);
+  const lines = ['【用户个人学情（来自系统统计，可用于个性化回答）。掌握度由贝叶斯知识追踪估计：知识掌握后验 × 当前记忆保持率】'];
+  if (weakTop.length) {
+    lines.push(`薄弱知识点：${weakTop.map((n) => {
+      const retention = Math.round(retentionOf(n) * 100);
+      return `${n.name}(${n.subject || '未分类'}，掌握度${n.mastery}%${n.last_review_at ? `，记忆保持${retention}%` : ''})`;
+    }).join('；')}`);
   }
   if (recentWrong.length) {
     lines.push(`最近错题：${recentWrong.map((w) => `${w.subject || '未分类'}/${w.error_cause || '未标注'}：${String(w.question).slice(0, 40)}`).join('；')}`);
@@ -78,7 +85,7 @@ export function buildLearningProfile() {
   if (practice.total) {
     lines.push(`变式练习正确率：${Math.round((practice.correct / practice.total) * 100)}%（共${practice.total}题）`);
   }
-  if (reviewDue) lines.push(`今日待复习知识点（记忆曲线到期）：${reviewDue} 个`);
+  if (reviewDue) lines.push(`今日待复习知识点（自适应记忆调度到期）：${reviewDue} 个`);
   return lines.join('\n');
 }
 

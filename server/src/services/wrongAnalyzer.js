@@ -176,7 +176,11 @@ ${tagList}
 }
 
 function offlineStructure(w) {
-  const keywords = extractKeywords(`${w.question} ${w.options || ''}`, 4);
+  let keywords = extractKeywords(`${w.question} ${w.options || ''}`, 4);
+  if (!keywords.length) {
+    // 短文本兜底：题干重复词不足时用「科目·待归类考点」占位，确保证据仍写入掌握度管线
+    keywords = [`${w.subject || '通用'}·待归类考点`];
+  }
   return {
     subject: w.subject || null,
     options: w.options || null,

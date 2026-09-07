@@ -4,8 +4,11 @@ import { logger } from '../logger.js';
 import { aiEnabled, chat } from '../ai/client.js';
 import {
   overview, report, reportSummary,
-  completeReview, recordPracticeResult, masteryScore, weakCandidates, encourage, getEncourage, refreshEncourage
+  completeReview, recordPracticeResult, masteryScore, weakCandidates, encourage, getEncourage, refreshEncourage,
+  learningStateOf, retentionOf
 } from '../services/study.js';
+import { recallProbability, reviewIntervalDays, daysSince } from '../services/bayes.js';
+import { subjectProfile } from '../services/subjects.js';
 import { listCauseTags } from '../services/causeTags.js';
 
 export const studyRouter = Router();
@@ -40,10 +43,27 @@ studyRouter.post('/encourage/refresh', async (req, res, next) => {
 
 studyRouter.post('/reviews/:nodeId/complete', (req, res) => {
   const nodeId = Number(req.params.nodeId);
-  const m = completeReview(nodeId);
+  // result: 'recalled'(默认，兼容旧前端) | 'forgot' —— 成功回忆与遗忘走不同的贝叶斯更新
+  const result = req.body?.result === 'forgot' ? 'forgot' : 'recalled';
+  const m = completeReview(nodeId, result);
   if (!m) return res.status(404).json({ error: '该知识点暂无掌握度记录' });
-  const node = db.prepare('SELECT name FROM knowledge_nodes WHERE id = ?').get(nodeId);
-  res.json({ ok: true, mastery: masteryScore(m), name: node?.name, nextReview: m.next_review_at });
+  const node = db.prepare('SELECT name, subject FROM knowledge_nodes WHERE id = ?').get(nodeId);
+  const state = learningStateOf(m);
+  const retention = recallProbability(state.stability, daysSince(m.last_review_at) ?? 0);
+  const profile = subjectProfile(node?.subject);
+  res.json({
+    ok: true,
+    mastery: masteryScore(m),
+    name: node?.name,
+    nextReview: m.next_review_at,
+    pKnown: state.pKnown,
+    stability: state.stability,
+    retention,
+    stage: m.stage,
+    advice: result === 'forgot'
+      ? '已标记遗忘：稍后重读一遍知识点，系统会在记忆开始消退前再次安排复习。'
+      : `建议复习方式：${profile.reviewStyle}`
+  });
 });
 
 studyRouter.get('/practices', (req, res) => {
@@ -119,14 +139,18 @@ studyRouter.post('/practices/:id/submit', async (req, res, next) => {
     recordPracticeResult(p.node_id, isCorrect);
 
     const m = db.prepare('SELECT * FROM mastery WHERE node_id = ?').get(p.node_id);
-    const node = db.prepare('SELECT name FROM knowledge_nodes WHERE id = ?').get(p.node_id);
+    const node = db.prepare('SELECT name, subject FROM knowledge_nodes WHERE id = ?').get(p.node_id);
+    const state = m ? learningStateOf(m) : null;
     res.json({
       isCorrect,
       comment,
       byAI,
       referenceAnswer: p.reference_answer,
       nodeName: node?.name,
-      mastery: m ? masteryScore(m) : null
+      mastery: m ? masteryScore(m) : null,
+      pKnown: state?.pKnown ?? null,
+      retention: m ? retentionOf(m) : null,
+      nextReview: m?.next_review_at ?? null
     });
   } catch (e) {
     next(e);
@@ -146,6 +170,8 @@ studyRouter.get('/report/summary', async (req, res, next) => {
 });
 
 async function aiGenerateVariant(node, source) {
+  // 学科学习策略注入：不同学科用不同的命题风格与训练重点
+  const profile = subjectProfile(node.subject);
   const reply = await chat([
     {
       role: 'system',
@@ -157,7 +183,8 @@ async function aiGenerateVariant(node, source) {
 }
 figure 图形规范（系统会据此渲染，不要让 AI 画图）：
 {"type":"polygon","points":[[x,y],...],"labels":["A","B",...] } 或 {"type":"circle","cx":150,"cy":150,"r":80,"labels":["O"]}
-坐标系 0~300，y 向下。不要输出 JSON 以外的内容。`
+坐标系 0~300，y 向下。不要输出 JSON 以外的内容。
+学科训练策略（${node.subject || '未知科目'}·${profile.type}型）：${profile.practiceHint}；记忆要点：${profile.memoryHint}。`
     },
     {
       role: 'user',
